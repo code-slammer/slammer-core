@@ -14,7 +14,6 @@ import (
 	"github.com/firecracker-microvm/firecracker-go-sdk"
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/models"
 	"github.com/joho/godotenv"
-	"github.com/k0kubun/pp/v3"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 )
@@ -51,7 +50,7 @@ func main() {
 	gid := 123
 	outputMatcher := regexp.MustCompile("====>([^\n]+)")
 
-	output := bytes.NewBuffer(nil)
+	output := bytes.NewBuffer(make([]byte, 0, 10))
 	mw := io.MultiWriter(output, os.Stdout)
 
 	create_interface("0")
@@ -134,7 +133,7 @@ func main() {
 	}
 	defer m.StopVMM()
 
-	code := Code{Code: "head -c 75m /dev/random > out.file && df -h / && sleep 500", Type: "bash"}
+	code := Code{Code: "echo hello, world!", Type: "bash"}
 
 	// jsonCode, err := json.Marshal(code)
 	// must(err)
@@ -153,24 +152,30 @@ func main() {
 	}()
 
 	if err := m.Wait(vmmCtx); err != nil {
-		if timeout {
-			fmt.Println("Timeout")
-		} else {
+		if !timeout {
 			fmt.Println(err)
 		}
 	}
 
-	fmt.Println("Here is the output")
-	codeOut := output.String()
-	match := outputMatcher.FindSubmatch(output.Bytes())
-	if match != nil || len(match) >= 1 {
-		err := json.Unmarshal(match[1], &codeOut)
-		if err != nil {
-			fmt.Println("Error unmarshalling output")
+	codeOut := CodeOutput{}
+	if timeout {
+		codeOut.Error = "Code Timeout"
+		codeOut.ExitCode = 1
+	} else {
+		match := outputMatcher.FindSubmatch(output.Bytes())
+		if match != nil || len(match) >= 1 {
+			err := json.Unmarshal(match[1], &codeOut)
+			if err != nil {
+				fmt.Println("Error unmarshalling output")
+			}
 		}
 	}
 
-	pp.Println(codeOut)
+	fmt.Println("Exit code:", codeOut.ExitCode)
+	fmt.Println("Stdout:")
+	fmt.Println(codeOut.Stdout)
+	fmt.Println("Stderr:")
+	fmt.Println(codeOut.Stderr)
 
 }
 
