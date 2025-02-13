@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/firecracker-microvm/firecracker-go-sdk"
@@ -51,7 +52,9 @@ func main() {
 	outputMatcher := regexp.MustCompile("====>([^\n]+)")
 
 	output := bytes.NewBuffer(make([]byte, 0, 10))
-	mw := io.MultiWriter(output, os.Stdout)
+	outputWriter := output
+	// outputWriter := NewLimitedWriter(output, 1024*5)
+	mw := io.MultiWriter(outputWriter, os.Stdout)
 
 	create_interface("0")
 	defer delete_interface("0")
@@ -67,7 +70,7 @@ func main() {
 		MachineCfg: models.MachineConfiguration{
 			VcpuCount:  firecracker.Int64(1),
 			Smt:        firecracker.Bool(false),
-			MemSizeMib: firecracker.Int64(256),
+			MemSizeMib: firecracker.Int64(128),
 		},
 		JailerCfg: &firecracker.JailerConfig{
 			UID:            &uid,
@@ -79,7 +82,7 @@ func main() {
 			ChrootStrategy: firecracker.NewNaiveChrootStrategy(kernelImagePath),
 			ExecFile:       base_dir + "firecracker-v1.10.1-x86_64",
 			CgroupVersion:  "2",
-			Stdin:          os.Stdin,
+			Stdin:          nil,
 			Stdout:         mw,
 			Stderr:         mw,
 		},
@@ -133,7 +136,7 @@ func main() {
 	}
 	defer m.StopVMM()
 
-	code := Code{Code: "echo hello, world!", Type: "bash"}
+	code := Code{Code: os.Args[2], Type: os.Args[1]}
 
 	// jsonCode, err := json.Marshal(code)
 	// must(err)
@@ -163,10 +166,25 @@ func main() {
 		codeOut.ExitCode = 1
 	} else {
 		match := outputMatcher.FindSubmatch(output.Bytes())
-		if match != nil || len(match) >= 1 {
+		if len(match) >= 1 {
 			err := json.Unmarshal(match[1], &codeOut)
 			if err != nil {
 				fmt.Println("Error unmarshalling output")
+			}
+		} else {
+			if strings.Contains(output.String(), "Out of memory") {
+				codeOut.Error = "Out of memory"
+				codeOut.ExitCode = 1
+			} else if i := strings.Index(output.String(), "Kernel panic"); i != -1 {
+				// print the kernel panic message till the end of the line
+				endOfLine := strings.Index(output.String()[i:], "\n")
+				if endOfLine != -1 {
+					codeOut.Error = output.String()[i : i+endOfLine]
+				} else {
+					codeOut.Error = output.String()[i:]
+				}
+				codeOut.ExitCode = 1
+
 			}
 		}
 	}
@@ -176,7 +194,12 @@ func main() {
 	fmt.Println(codeOut.Stdout)
 	fmt.Println("Stderr:")
 	fmt.Println(codeOut.Stderr)
+	if codeOut.Error != "" {
+		fmt.Println("Error:")
+		fmt.Println(codeOut.Error)
+	}
 
+	// time.Sleep(15 * time.Second)
 }
 
 func dump_interface(id string) {
@@ -230,7 +253,10 @@ func delete_interface(id string) {
 	// Delete the tap interface
 	// equivalent to `sudo ip link del "$TAP_DEV"`
 	link, err := netlink.LinkByName("tap" + id)
-	must(err)
+	// must(err)
+	if err != nil {
+		return
+	}
 	must(netlink.LinkDel(link))
 }
 

@@ -1,6 +1,6 @@
 FROM alpine
 # kbd adds openvt
-RUN apk add bash sysbench iproute2
+RUN apk add bash iproute2 python3 curl
 
 COPY build_script.sh /
 
@@ -17,7 +17,5 @@ RUN addgroup \
     --uid "1000" \
     user
 # --no-create-home \
-
-RUN echo "ttyS0::respawn:/bin/bash" >> /etc/inittab
 
 CMD /build_script.sh

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -8,7 +9,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"reflect"
+	"runtime"
 	"syscall"
+	"time"
 )
 
 const MMDS_IP = "169.254.169.254"
@@ -25,22 +29,42 @@ type CodeOutput struct {
 	Error    string `json:"error,omitempty"`
 }
 
+func timeFunc(f func()) {
+	start := time.Now()
+	f()
+	end := time.Now()
+	fmt.Printf("%s took: %s\n", runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name(), end.Sub(start))
+}
+
+var languages = map[string][]string{
+	"bash":   {"/bin/bash", "-c"},
+	"python": {"/usr/bin/python3", "-c"},
+}
+
 func main() {
 	fmt.Println("Started init process")
 	defer syscall.Reboot(syscall.LINUX_REBOOT_CMD_RESTART)
 
 	// Due to the nature of the init process, all necessary setup will panic if it fails
-	setup_network()
-	resp := getMMDS()
-	if resp.Type != "bash" {
-		fmt.Println("Invalid code type")
-		return
-	}
+	timeFunc(setup_network)
+	resp := &Code{}
+	timeFunc(func() {
+		resp = getMMDS()
+		if _, ok := languages[resp.Type]; !ok {
+			panic("Unsupported language " + resp.Type)
+		}
+	})
 	// create a stdout buffer
 	stdout := bytes.NewBuffer(nil)
 	stderr := bytes.NewBuffer(nil)
+	lang := languages[resp.Type]
+	cmd := &exec.Cmd{}
+	if len(lang) >= 2 {
+		cmd = exec.Command(lang[0], append(lang[1:], resp.Code)...)
+	} else {
+		cmd = exec.Command(lang[0], resp.Code)
+	}
 
-	cmd := exec.Command("/bin/bash", "-c", resp.Code)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Credential: &syscall.Credential{
 			Uid: 1000,
@@ -64,9 +88,14 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("====>%s\n", string(outMarshalled))
+	f := bufio.NewWriter(os.Stdout)
+	f.WriteString("====>")
+	f.Write(outMarshalled)
+	f.WriteRune('\n')
+	f.Flush()
 }
 func setup_network() {
+	//TODO: Reimplement using netlink
 	//ip addr add 172.16.0.2/24 dev eth0
 	run("/sbin/ip", "addr", "add", "172.16.0.2/24", "dev", "eth0")
 	//ip link set eth0 up

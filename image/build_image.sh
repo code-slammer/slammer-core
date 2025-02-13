@@ -12,7 +12,7 @@ echo "Container $IMAGE_TAG built!"
 docker run --rm -it -v "$TMP_DIR:/myfs" "$IMAGE_TAG"
 
 # sudo cp start.sh "$TMP_DIR"
-CGO_ENABLED=0 go build -o init init.go
+CGO_ENABLED=0 go build -o init -ldflags "-w -s" init.go
 sudo cp init "$TMP_DIR/init"
 
 sudo mksquashfs "$TMP_DIR" ~/rootfs/testing/image.img -noappend
