@@ -1,4 +1,4 @@
-module github.com/dear-slammer/slammer-core
+module github.com/code-slammer/slammer-core
 
 go 1.23.5
 
