@@ -1,37 +1,20 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"os"
-	"regexp"
-	"strings"
+	"path"
+	"sync"
 	"time"
 
 	"github.com/firecracker-microvm/firecracker-go-sdk"
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/models"
 	"github.com/joho/godotenv"
+	"github.com/k0kubun/pp/v3"
 	"github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
 )
-
-const DEFAULT_MAC = "06:00:AC:10:00:02"
-
-type CodeOutput struct {
-	Stdout   string `json:"stdout,omitempty"`
-	Stderr   string `json:"stderr,omitempty"`
-	ExitCode int    `json:"exit_code"`
-	Error    string `json:"error,omitempty"`
-}
-
-type Code struct {
-	Code string `json:"code"`
-	Type string `json:"type"`
-}
 
 func main() {
 	must(godotenv.Load())
@@ -49,16 +32,7 @@ func main() {
 
 	uid := 123
 	gid := 123
-	outputMatcher := regexp.MustCompile("====>([^\n]+)")
 
-	output := bytes.NewBuffer(make([]byte, 0, 10))
-	outputWriter := output
-	// outputWriter := NewLimitedWriter(output, 1024*5)
-	mw := io.MultiWriter(outputWriter, os.Stdout)
-
-	create_interface("0")
-	defer delete_interface("0")
-	// dump_interface("0")
 	fcCfg := firecracker.Config{
 		SocketPath:      "api.socket",
 		KernelImagePath: kernelImagePath,
@@ -83,19 +57,17 @@ func main() {
 			ExecFile:       base_dir + "firecracker-v1.10.1-x86_64",
 			CgroupVersion:  "2",
 			Stdin:          nil,
-			Stdout:         mw,
-			Stderr:         mw,
+			Stdout:         io.Discard,
+			Stderr:         io.Discard,
+			CgroupArgs:     []string{},
 		},
-		Seccomp:     firecracker.SeccompConfig{Enabled: true},
-		MmdsVersion: firecracker.MMDSv2,
-		MmdsAddress: net.ParseIP("169.254.169.254"),
-		NetworkInterfaces: firecracker.NetworkInterfaces{
-			firecracker.NetworkInterface{
-				StaticConfiguration: &firecracker.StaticNetworkConfiguration{
-					MacAddress:  DEFAULT_MAC,
-					HostDevName: "tap0",
-				},
-				AllowMMDS: true,
+		Seccomp:           firecracker.SeccompConfig{Enabled: true},
+		NetworkInterfaces: nil,
+		VsockDevices: []firecracker.VsockDevice{
+			{
+				// ID:   "2",
+				Path: "./vsock.sock",
+				CID:  3,
 			},
 		},
 	}
@@ -131,17 +103,29 @@ func main() {
 		panic(err)
 	}
 
+	// send the code
+
 	if err := m.Start(vmmCtx); err != nil {
 		panic(err)
 	}
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		jailer_dir := m.Cfg.JailerCfg.ChrootBaseDir
+		socket_path := path.Join(jailer_dir, "firecracker-v1.10.1-x86_64", m.Cfg.JailerCfg.ID, "root", "vsock.sock_1024")
+		out, err := send_code(socket_path, "bash", "echo 'Hello, World!'")
+		if err != nil {
+			fmt.Println(err)
+		}
+		pp.Println(out)
+	}()
 	defer m.StopVMM()
-
-	code := Code{Code: os.Args[2], Type: os.Args[1]}
+	defer wg.Wait()
 
 	// jsonCode, err := json.Marshal(code)
 	// must(err)
 	// wait for the VMM to exit
-	must(m.SetMetadata(vmmCtx, code))
 
 	timeout := false
 	go func() {
@@ -160,104 +144,11 @@ func main() {
 		}
 	}
 
-	codeOut := CodeOutput{}
 	if timeout {
-		codeOut.Error = "Code Timeout"
-		codeOut.ExitCode = 1
-	} else {
-		match := outputMatcher.FindSubmatch(output.Bytes())
-		if len(match) >= 1 {
-			err := json.Unmarshal(match[1], &codeOut)
-			if err != nil {
-				fmt.Println("Error unmarshalling output")
-			}
-		} else {
-			if strings.Contains(output.String(), "Out of memory") {
-				codeOut.Error = "Out of memory"
-				codeOut.ExitCode = 1
-			} else if i := strings.Index(output.String(), "Kernel panic"); i != -1 {
-				// print the kernel panic message till the end of the line
-				endOfLine := strings.Index(output.String()[i:], "\n")
-				if endOfLine != -1 {
-					codeOut.Error = output.String()[i : i+endOfLine]
-				} else {
-					codeOut.Error = output.String()[i:]
-				}
-				codeOut.ExitCode = 1
-
-			}
-		}
-	}
-
-	fmt.Println("Exit code:", codeOut.ExitCode)
-	fmt.Println("Stdout:")
-	fmt.Println(codeOut.Stdout)
-	fmt.Println("Stderr:")
-	fmt.Println(codeOut.Stderr)
-	if codeOut.Error != "" {
-		fmt.Println("Error:")
-		fmt.Println(codeOut.Error)
+		fmt.Println("timeout")
 	}
 
 	// time.Sleep(15 * time.Second)
-}
-
-func dump_interface(id string) {
-	// Dump the tap interface
-	// equivalent to `sudo ip tuntap show dev "$TAP_DEV"`
-	link, err := netlink.LinkByName("tap" + id)
-	must(err)
-
-	for _, attr := range []byte(link.Attrs().HardwareAddr) {
-		fmt.Printf("%02x:", attr)
-	}
-	fmt.Println()
-	// out, err := json.MarshalIndent(link.Attrs(), "", "\t")
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// link.Attrs()
-	// os.WriteFile("interface_attr_correct.json", out, 0644)
-}
-func create_interface(id string) {
-	// Create a tap interface for the firecracker instance
-	// equivalent to `sudo ip tuntap add dev "$TAP_DEV" mode tap`
-
-	// Create a new TAP interface
-	mac, err := net.ParseMAC(DEFAULT_MAC)
-	must(err)
-	link := &netlink.Tuntap{
-		LinkAttrs: netlink.LinkAttrs{
-			Name:         "tap" + id,
-			Flags:        net.FlagUp,
-			HardwareAddr: mac,
-		},
-		Mode:       netlink.TUNTAP_MODE_TAP,
-		Owner:      uint32(123),
-		Group:      uint32(123),
-		NonPersist: false,
-	}
-	must(netlink.LinkAdd(link))
-	// Set the interface ip address
-	// equivalent to `sudo ip addr add
-	_, ipnet, err := net.ParseCIDR("172.16.0.2/24")
-	must(err)
-	addr := &netlink.Addr{
-		IPNet: ipnet,
-	}
-	must(netlink.AddrAdd(link, addr))
-	must(netlink.LinkSetUp(link))
-
-}
-func delete_interface(id string) {
-	// Delete the tap interface
-	// equivalent to `sudo ip link del "$TAP_DEV"`
-	link, err := netlink.LinkByName("tap" + id)
-	// must(err)
-	if err != nil {
-		return
-	}
-	must(netlink.LinkDel(link))
 }
 
 func cleanup(jailer_sandbox string) {
