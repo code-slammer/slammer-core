@@ -22,10 +22,16 @@ type ExecReply struct {
 	Stdout   []byte
 	Stderr   []byte
 	ExitCode int
-	Error    string
 }
 
 func (v *VMService) ExecCommand(args ExecArgs, reply *ExecReply) error {
+	defer func() {
+		if args.ShutdownOnExit {
+			if v.ShutdownFn != nil {
+				go v.ShutdownFn() // Shutdown the VM after command execution
+			}
+		}
+	}()
 	cmd := exec.Command(args.Command, args.Args...)
 	stdout := bytes.NewBuffer(nil)
 	stderr := bytes.NewBuffer(nil)
@@ -46,12 +52,7 @@ func (v *VMService) ExecCommand(args ExecArgs, reply *ExecReply) error {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			reply.ExitCode = exitErr.ExitCode()
 		}
-		reply.Error = err.Error()
-	}
-	if args.ShutdownOnExit {
-		if v.ShutdownFn != nil {
-			go v.ShutdownFn() // Shutdown the VM after command execution
-		}
+		return err
 	}
 	return nil
 }

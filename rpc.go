@@ -33,7 +33,7 @@ func (v *VMClient) ExecuteCommand(args *slammer_rpc.ExecArgs) (*slammer_rpc.Exec
 	resp := slammer_rpc.ExecReply{}
 	err := v.client.Call("VMService.ExecCommand", args, &resp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call ExecCommand: %v", err)
+		return &resp, fmt.Errorf("failed to call ExecCommand: %v", err)
 	}
 	return &resp, nil
 }

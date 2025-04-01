@@ -170,13 +170,12 @@ func createAndRunVM(fcCfg firecracker.Config) error {
 		)
 		if err != nil {
 			fmt.Println("ErrorExec:", err)
-			return
 		}
-		fmt.Printf("Output:\n%v\n", string(out.Stdout))
-		fmt.Printf("StdError:\n%v\n", string(out.Stderr))
-		fmt.Printf("ExitCode: %v\n", out.ExitCode)
-		fmt.Printf("Error: %v\n", out.Error)
-
+		if out != nil {
+			fmt.Printf("Output:\n%v\n", string(out.Stdout))
+			fmt.Printf("StdError:\n%v\n", string(out.Stderr))
+			fmt.Printf("ExitCode: %v\n", out.ExitCode)
+		}
 		out, err = vmClient.ExecuteCommand(
 			&slammer_rpc.ExecArgs{
 				Command:        "/bin/bash",
@@ -190,12 +189,12 @@ func createAndRunVM(fcCfg firecracker.Config) error {
 		)
 		if err != nil {
 			fmt.Println("Error:", err)
-			return
 		}
-		fmt.Printf("Output:\n%v\n", string(out.Stdout))
-		fmt.Printf("StdError:\n%v\n", string(out.Stderr))
-		fmt.Printf("ExitCode: %v\n", out.ExitCode)
-		fmt.Printf("Error: %v\n", out.Error)
+		if out != nil {
+			fmt.Printf("Output:\n%v\n", string(out.Stdout))
+			fmt.Printf("StdError:\n%v\n", string(out.Stderr))
+			fmt.Printf("ExitCode: %v\n", out.ExitCode)
+		}
 	}()
 	defer m.StopVMM()
 	defer wg.Wait()
