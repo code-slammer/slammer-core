@@ -26,20 +26,12 @@ func NewVMClient(socket_path string) *VMClient {
 	}
 }
 
-func (v *VMClient) ExecuteCommand(socket_path, command string, args []string) (*slammer_rpc.ExecReply, error) {
+func (v *VMClient) ExecuteCommand(args *slammer_rpc.ExecArgs) (*slammer_rpc.ExecReply, error) {
 	if v.client == nil {
 		return nil, fmt.Errorf("not connected to VM")
 	}
 	resp := slammer_rpc.ExecReply{}
-	err := v.client.Call("VMService.ExecCommand", slammer_rpc.ExecArgs{
-		Command:        command,
-		Args:           args,
-		UID:            1000,
-		GID:            1000,
-		WorkDir:        "/home/user",
-		Env:            []string{"SECRET=messages_are_calling_to_me_endlessly"},
-		ShutdownOnExit: true,
-	}, &resp)
+	err := v.client.Call("VMService.ExecCommand", args, &resp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call ExecCommand: %v", err)
 	}

@@ -9,10 +9,11 @@ import (
 	"sync"
 	"time"
 
+	slammer_rpc "github.com/code-slammer/slammer-core/rpc"
 	"github.com/firecracker-microvm/firecracker-go-sdk"
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/models"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
-	"github.com/k0kubun/pp/v3"
 	"github.com/sirupsen/logrus"
 )
 
@@ -23,12 +24,13 @@ func main() {
 		panic("BASE_DIR is not set (make sure to have a trailing slash)")
 	}
 
-	jailer_sandbox := base_dir + "jailer_sandbox/"
+	// jailer_sandbox := base_dir + "jailer_sandbox/"
+	jailer_sandbox := "/srv/jailer/"
 	cleanup(jailer_sandbox)
 
 	kernelImagePath := base_dir + "kernel/vmlinux-6.1.102"
 
-	const id = "test"
+	id := uuid.New().String()
 
 	uid := 123
 	gid := 123
@@ -66,7 +68,6 @@ func main() {
 		NetworkInterfaces: nil,
 		VsockDevices: []firecracker.VsockDevice{
 			{
-				// ID:   "2",
 				Path: "./vsock.sock",
 				CID:  3,
 			},
@@ -145,14 +146,56 @@ func createAndRunVM(fcCfg firecracker.Config) error {
 			fmt.Println("Error:", err)
 			return
 		}
-		out, err := vmClient.ExecuteCommand(socket_path, "/home/user/hello.sh", []string{"hello.sh"})
+		code, err = os.ReadFile("test.py")
 		if err != nil {
 			fmt.Println("Error:", err)
 			return
 		}
-		pp.Println(out)
-		fmt.Printf("Output: %v\n", string(out.Stdout))
-		fmt.Printf("Error: %v\n", string(out.Stderr))
+		err = vmClient.UploadFile("/home/user/hello.py", code)
+
+		if err != nil {
+			fmt.Println("Error:", err)
+			return
+		}
+		out, err := vmClient.ExecuteCommand(
+			&slammer_rpc.ExecArgs{
+				Command:        "/usr/bin/python3",
+				Args:           []string{"hello.py"},
+				UID:            1000,
+				GID:            1000,
+				WorkDir:        "/home/user",
+				Env:            []string{"SECRET=messages_are_calling_to_me_endlessly"},
+				ShutdownOnExit: false,
+			},
+		)
+		if err != nil {
+			fmt.Println("ErrorExec:", err)
+			return
+		}
+		fmt.Printf("Output:\n%v\n", string(out.Stdout))
+		fmt.Printf("StdError:\n%v\n", string(out.Stderr))
+		fmt.Printf("ExitCode: %v\n", out.ExitCode)
+		fmt.Printf("Error: %v\n", out.Error)
+
+		out, err = vmClient.ExecuteCommand(
+			&slammer_rpc.ExecArgs{
+				Command:        "/bin/bash",
+				Args:           []string{"hello.sh"},
+				UID:            1000,
+				GID:            1000,
+				WorkDir:        "/home/user",
+				Env:            []string{"SECRET=messages_are_calling_to_me_endlessly"},
+				ShutdownOnExit: true,
+			},
+		)
+		if err != nil {
+			fmt.Println("Error:", err)
+			return
+		}
+		fmt.Printf("Output:\n%v\n", string(out.Stdout))
+		fmt.Printf("StdError:\n%v\n", string(out.Stderr))
+		fmt.Printf("ExitCode: %v\n", out.ExitCode)
+		fmt.Printf("Error: %v\n", out.Error)
 	}()
 	defer m.StopVMM()
 	defer wg.Wait()

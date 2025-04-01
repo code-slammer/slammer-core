@@ -1,5 +1,6 @@
 #!/bin/bash
 
+
 printenv
 
 unset SECRET
