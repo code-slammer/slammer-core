@@ -126,13 +126,26 @@ func createAndRunVM(fcCfg firecracker.Config) error {
 		socket_path := path.Join(jailer_dir, "firecracker-v1.10.1-x86_64", m.Cfg.JailerCfg.ID, "root", "vsock.sock")
 		// make a new child context with a timeout
 		vmServiceCtx, cancel := context.WithTimeout(vmmCtx, VM_TIMEOUT)
-		err := wait_for_vm_service(vmServiceCtx, socket_path, 10*time.Millisecond)
+		vmClient := NewVMClient(socket_path)
+		defer vmClient.Close()
+		err := vmClient.Connect(vmServiceCtx, 10*time.Millisecond)
 		cancel()
 		if err != nil {
 			fmt.Println("Error:", err)
 			return
 		}
-		out, err := send_code(socket_path, "/bin/bash", "echo 'Hello, World!'")
+		// upload the code
+		code, err := os.ReadFile("test.sh")
+		if err != nil {
+			fmt.Println("Error:", err)
+			return
+		}
+		err = vmClient.UploadFile("/home/user/hello.sh", code)
+		if err != nil {
+			fmt.Println("Error:", err)
+			return
+		}
+		out, err := vmClient.ExecuteCommand(socket_path, "/home/user/hello.sh", []string{"hello.sh"})
 		if err != nil {
 			fmt.Println("Error:", err)
 			return

@@ -14,38 +14,30 @@ import (
 
 const PORT_NUMBER = 1024
 
-func send_code(socket_path, command, code string) (*slammer_rpc.ExecReply, error) {
-	// wait for the socket to be ready
-	conn, err := net.Dial("unix", socket_path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to socket: %v", err)
-	}
-	defer conn.Close()
+type VMClient struct {
+	SocketPath string
+	client     *rpc.Client
+	conn       net.Conn
+}
 
-	// send CONNECT <port_num>\n
-	_, err = fmt.Fprintf(conn, "CONNECT %d\n", PORT_NUMBER)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send connect message: %v", err)
+func NewVMClient(socket_path string) *VMClient {
+	return &VMClient{
+		SocketPath: socket_path,
 	}
-	// OK <assigned_hostside_port>\n
-	var assigned_port int
-	fmt.Fscanf(io.LimitReader(conn, 1024), "OK %d\n", &assigned_port)
-	fmt.Printf("Assigned port: %d\n", assigned_port)
-	if assigned_port == 0 {
-		return nil, fmt.Errorf("failed to connect. Assigned port is 0")
-	}
-	// send the code
-	client := rpc.NewClient(conn)
-	defer client.Close()
+}
 
+func (v *VMClient) ExecuteCommand(socket_path, command string, args []string) (*slammer_rpc.ExecReply, error) {
+	if v.client == nil {
+		return nil, fmt.Errorf("not connected to VM")
+	}
 	resp := slammer_rpc.ExecReply{}
-	err = client.Call("VMService.ExecCommand", slammer_rpc.ExecArgs{
+	err := v.client.Call("VMService.ExecCommand", slammer_rpc.ExecArgs{
 		Command:        command,
-		Args:           []string{"-c", code},
+		Args:           args,
 		UID:            1000,
 		GID:            1000,
 		WorkDir:        "/home/user",
-		Env:            []string{},
+		Env:            []string{"SECRET=messages_are_calling_to_me_endlessly"},
 		ShutdownOnExit: true,
 	}, &resp)
 	if err != nil {
@@ -53,27 +45,67 @@ func send_code(socket_path, command, code string) (*slammer_rpc.ExecReply, error
 	}
 	return &resp, nil
 }
+func (v *VMClient) UploadFile(file_path string, contents []byte) error {
+	if v.client == nil {
+		return fmt.Errorf("not connected to VM")
+	}
+	resp := slammer_rpc.UploadFileReply{}
+	err := v.client.Call("VMService.UploadFile", slammer_rpc.UploadFileArgs{
+		FilePath:    file_path,
+		Permissions: 0777,
+		UID:         1000,
+		GID:         1000,
+		Contents:    contents,
+	}, &resp)
+	if err != nil {
+		return fmt.Errorf("failed to call UploadFile: %v", err)
+	}
+	return nil
+}
+func (v *VMClient) Close() {
+	if v.client != nil {
+		v.client.Close()
+		v.client = nil
+	}
+	if v.conn != nil {
+		v.conn.Close()
+		v.conn = nil
+	}
 
-func wait_for_vm_service(context context.Context, socket_path string, sleep_delay time.Duration) error {
+}
+
+func (v *VMClient) Connect(context context.Context, sleep_delay time.Duration) error {
 	// wait for the socket to be ready
-	operation := func() error {
-		conn, err := net.Dial("unix", socket_path)
+	connect := func() (net.Conn, *rpc.Client, error) {
+		conn, err := net.Dial("unix", v.SocketPath)
 		if err != nil {
-			return fmt.Errorf("failed to connect to socket: %v", err)
+			return nil, nil, fmt.Errorf("failed to connect to socket: %v", err)
 		}
-		defer conn.Close()
 		// send CONNECT <port_num>\n
 		_, err = fmt.Fprintf(conn, "CONNECT %d\n", PORT_NUMBER)
 		if err != nil {
-			return fmt.Errorf("failed to send connect message: %v", err)
+			return conn, nil, fmt.Errorf("failed to send connect message: %v", err)
 		}
 		// OK <assigned_hostside_port>\n
 		var assigned_port int
 		fmt.Fscanf(io.LimitReader(conn, 1024), "OK %d\n", &assigned_port)
 		if assigned_port == 0 {
-			return fmt.Errorf("failed to connect. Assigned port is 0")
+			return conn, nil, fmt.Errorf("failed to connect. Assigned port is 0")
 		}
-		return nil
+		fmt.Printf("Assigned port: %d\n", assigned_port)
+		rpcClient := rpc.NewClient(conn)
+		if rpcClient == nil {
+			return conn, nil, fmt.Errorf("failed to create RPC client")
+		}
+		reply := slammer_rpc.PingReply{}
+		err = rpcClient.Call("VMService.Ping", slammer_rpc.PingArgs{}, &reply)
+		if err != nil {
+			return conn, rpcClient, fmt.Errorf("failed to ping VM: %v", err)
+		}
+		if reply.Msg != "pong" {
+			return conn, rpcClient, fmt.Errorf("failed to ping VM: %s != \"pong\"", reply.Msg)
+		}
+		return conn, rpcClient, nil
 	}
 	// Retry the operation until it succeeds or the context is done
 	for {
@@ -81,9 +113,18 @@ func wait_for_vm_service(context context.Context, socket_path string, sleep_dela
 		case <-context.Done():
 			return context.Err()
 		default:
-			err := operation()
+			conn, client, err := connect()
 			if err == nil {
+				v.client = client
+				v.conn = conn
 				return nil
+			} else {
+				if client != nil {
+					client.Close()
+				}
+				if conn != nil {
+					conn.Close()
+				}
 			}
 			// Sleep for the specified delay before retrying
 			time.Sleep(sleep_delay)

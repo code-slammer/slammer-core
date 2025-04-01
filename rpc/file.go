@@ -24,5 +24,10 @@ func (*VMService) UploadFile(args UploadFileArgs, reply *UploadFileReply) error 
 	if err != nil {
 		return err
 	}
+	// Set the file permissions
+	err = os.Chmod(args.FilePath, os.FileMode(args.Permissions))
+	if err != nil {
+		return err
+	}
 	return nil
 }
