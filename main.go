@@ -17,6 +17,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const FIRECRACKER_VERSION = "firecracker-v1.11.0-x86_64"
+
 func main() {
 	must(godotenv.Load())
 	base_dir := os.Getenv("BASE_DIR")
@@ -41,18 +43,19 @@ func main() {
 	// f.Close()
 	timeFunc(func() {
 		wg := sync.WaitGroup{}
-		for i := range 3 {
+		for i := range 1 {
 			wg.Add(1)
+			const NUM_SHARED_CPU = 1 // measured in # of 1/8 CPU
 			id := uuid.New().String()
 			fcCfg := firecracker.Config{
 				SocketPath:      "api.socket",
 				KernelImagePath: kernelImagePath,
 				//console=ttyS0 quiet
-				KernelArgs: "console=ttyS0 quiet reboot=k panic=1 pci=off overlay_root=ram init=/sbin/overlay-init",
-				// KernelArgs: "console=ttyS0 quiet reboot=k panic=1 pci=off nomodules random.trust_cpu=on i8042.noaux i8042.nomux i8042.nopnp i8042.nokbd overlay_root=ram init=/sbin/overlay-init",
+				KernelArgs: "quiet reboot=k panic=1 pci=off overlay_root=ram init=/sbin/overlay-init",
+				// KernelArgs: "console=ttyS0 reboot=k panic=1 pci=off nomodules random.trust_cpu=on i8042.noaux i8042.nomux i8042.nopnp i8042.nokbd overlay_root=ram init=/sbin/overlay-init",
 				// KernelArgs: "console=ttyS0 reboot=k panic=1 pci=off init=/sbin/overlay-init",
 				Drives:   firecracker.NewDrivesBuilder(base_dir + "rootfs/testing/image.img").Build(),
-				LogLevel: "Error",
+				LogLevel: "Debug",
 				MachineCfg: models.MachineConfiguration{
 					VcpuCount:  firecracker.Int64(1),
 					Smt:        firecracker.Bool(false),
@@ -66,12 +69,14 @@ func main() {
 					JailerBinary:   base_dir + "jailer",
 					ChrootBaseDir:  jailer_sandbox,
 					ChrootStrategy: firecracker.NewNaiveChrootStrategy(kernelImagePath),
-					ExecFile:       base_dir + "firecracker-v1.10.1-x86_64",
+					ExecFile:       base_dir + FIRECRACKER_VERSION,
 					CgroupVersion:  "2",
 					Stdin:          nil,
 					Stdout:         io.Discard,
 					Stderr:         io.Discard,
-					CgroupArgs:     []string{},
+					CgroupArgs: []string{
+						fmt.Sprintf("cpu.max=%d00 100000", 125*NUM_SHARED_CPU), // 1/8 CPU
+					},
 				},
 				Seccomp:           firecracker.SeccompConfig{Enabled: true},
 				NetworkInterfaces: nil,
@@ -118,8 +123,7 @@ func createAndRunVM(fcCfg firecracker.Config) error {
 		panic(err)
 	}
 
-	// send the code
-	const VM_TIMEOUT = 10 * time.Second
+	const VM_TIMEOUT = 30 * time.Second
 
 	if err := m.Start(vmmCtx); err != nil {
 		panic(err)
@@ -131,7 +135,7 @@ func createAndRunVM(fcCfg firecracker.Config) error {
 		// wait 100 ms for the init process to start
 		time.Sleep(125 * time.Millisecond)
 		jailer_dir := m.Cfg.JailerCfg.ChrootBaseDir
-		socket_path := path.Join(jailer_dir, "firecracker-v1.10.1-x86_64", m.Cfg.JailerCfg.ID, "root", "vsock.sock")
+		socket_path := path.Join(jailer_dir, FIRECRACKER_VERSION, m.Cfg.JailerCfg.ID, "root", "vsock.sock")
 		// make a new child context with a timeout
 		vmServiceCtx, cancel := context.WithTimeout(vmmCtx, VM_TIMEOUT)
 		vmClient := NewVMClient(socket_path)
@@ -142,9 +146,13 @@ func createAndRunVM(fcCfg firecracker.Config) error {
 			fmt.Println("Error:", err)
 			return
 		}
+		contents, _ := os.ReadFile("test.py")
+		vmClient.UploadFile("/home/user/test.py", contents)
 		out, err := vmClient.ExecuteCommand(&slammer_rpc.ExecArgs{
-			Command:        "/bin/bash",
-			Args:           []string{"-c", "echo hello from " + m.Cfg.JailerCfg.ID},
+			// Command:        "/bin/bash",
+			Command: "/usr/bin/python3",
+			// Args:           []string{"-c", "sysbench cpu run"},
+			Args:           []string{"test.py"},
 			UID:            1000,
 			GID:            1000,
 			WorkDir:        "/home/user",
@@ -156,6 +164,9 @@ func createAndRunVM(fcCfg firecracker.Config) error {
 			return
 		}
 		fmt.Println("Output:", string(out.Stdout))
+		fmt.Print("Stderr:", string(out.Stderr))
+		fmt.Println("Exit code:", out.ExitCode)
+
 	}()
 	defer m.StopVMM()
 	defer wg.Wait()

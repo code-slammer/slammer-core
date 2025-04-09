@@ -1,6 +1,6 @@
 FROM alpine
 # kbd adds openvt
-RUN apk add bash iproute2 python3 curl
+RUN apk add bash iproute2 python3 curl sysbench
 
 COPY build_script.sh /
 

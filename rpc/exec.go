@@ -51,6 +51,7 @@ func (v *VMService) ExecCommand(args ExecArgs, reply *ExecReply) error {
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			reply.ExitCode = exitErr.ExitCode()
+			return nil
 		}
 		return err
 	}

@@ -34,7 +34,7 @@ func main() {
 		clientConn, err := conn.Accept()
 		if err != nil {
 			log.Printf("Error accepting connection: %v", err)
-			continue
+			return
 		}
 
 		// Handle each connection in a new goroutine using JSON-RPC
