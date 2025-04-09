@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
+	"strconv"
 	"sync"
 	"time"
 
@@ -43,9 +45,32 @@ func main() {
 	// f.Close()
 	timeFunc(func() {
 		wg := sync.WaitGroup{}
-		for i := range 1 {
+		numVMs := 1
+		NUM_SHARED_CPU := 1 // measured in # of 1/8 CPU
+
+		if len(os.Args) > 1 {
+			// If an argument is passed, use it as the number of VMs to create
+			var err error
+			numVMs, err = strconv.Atoi(os.Args[1])
+			if err != nil {
+				panic(fmt.Errorf("Invalid number of VMs: %v", err))
+			}
+			if len(os.Args) > 2 {
+				NUM_SHARED_CPU, err = strconv.Atoi(os.Args[2])
+				if err != nil {
+					panic(fmt.Errorf("Invalid number of shared CPUs: %v", err))
+				}
+			}
+		}
+		NUM_VCPU := int(math.Ceil(float64(NUM_SHARED_CPU) / 8.0))
+		cgroup_args := []string{}
+		if NUM_SHARED_CPU < 8 {
+			cgroup_args = append(cgroup_args, fmt.Sprintf("cpu.max=%d00 100000", 125*NUM_SHARED_CPU)) // 1/8 CPU
+		}
+
+		fmt.Printf("Creating %d VMs with %d shared CPUs (%d real CPUs)\n", numVMs, NUM_SHARED_CPU, NUM_VCPU)
+		for i := range numVMs {
 			wg.Add(1)
-			const NUM_SHARED_CPU = 1 // measured in # of 1/8 CPU
 			id := uuid.New().String()
 			fcCfg := firecracker.Config{
 				SocketPath:      "api.socket",
@@ -57,7 +82,7 @@ func main() {
 				Drives:   firecracker.NewDrivesBuilder(base_dir + "rootfs/testing/image.img").Build(),
 				LogLevel: "Debug",
 				MachineCfg: models.MachineConfiguration{
-					VcpuCount:  firecracker.Int64(1),
+					VcpuCount:  firecracker.Int64(int64(NUM_VCPU)),
 					Smt:        firecracker.Bool(false),
 					MemSizeMib: firecracker.Int64(128),
 				},
@@ -74,9 +99,7 @@ func main() {
 					Stdin:          nil,
 					Stdout:         io.Discard,
 					Stderr:         io.Discard,
-					CgroupArgs: []string{
-						fmt.Sprintf("cpu.max=%d00 100000", 125*NUM_SHARED_CPU), // 1/8 CPU
-					},
+					CgroupArgs:     cgroup_args,
 				},
 				Seccomp:           firecracker.SeccompConfig{Enabled: true},
 				NetworkInterfaces: nil,
