@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"net/rpc"
+	"net/rpc/jsonrpc"
 
 	slammer_rpc "github.com/code-slammer/slammer-core/rpc"
 )
@@ -85,7 +86,12 @@ func (v *VMClient) Connect(context context.Context, sleep_delay time.Duration) e
 			return conn, nil, fmt.Errorf("failed to connect. Assigned port is 0")
 		}
 		fmt.Printf("Assigned port: %d\n", assigned_port)
-		rpcClient := rpc.NewClient(conn)
+
+		/* NOTE: We are using jsonrpc for the codec because by default
+		the net/rpc package uses gob, which could have potential DOS issues.
+		See: https://pkg.go.dev/encoding/gob#hdr-Security
+		*/
+		rpcClient := jsonrpc.NewClient(conn)
 		if rpcClient == nil {
 			return conn, nil, fmt.Errorf("failed to create RPC client")
 		}

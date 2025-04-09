@@ -30,52 +30,8 @@ func main() {
 
 	kernelImagePath := base_dir + "kernel/vmlinux-6.1.102"
 
-	id := uuid.New().String()
-
 	uid := 123
 	gid := 123
-
-	fcCfg := firecracker.Config{
-		SocketPath:      "api.socket",
-		KernelImagePath: kernelImagePath,
-		//console=ttyS0 quiet
-		KernelArgs: "console=ttyS0 quiet reboot=k panic=1 pci=off overlay_root=ram init=/sbin/overlay-init",
-		// KernelArgs: "console=ttyS0 quiet reboot=k panic=1 pci=off nomodules random.trust_cpu=on i8042.noaux i8042.nomux i8042.nopnp i8042.nokbd overlay_root=ram init=/sbin/overlay-init",
-		// KernelArgs: "console=ttyS0 reboot=k panic=1 pci=off init=/sbin/overlay-init",
-		Drives:   firecracker.NewDrivesBuilder(base_dir + "rootfs/testing/image.img").Build(),
-		LogLevel: "Error",
-		MachineCfg: models.MachineConfiguration{
-			VcpuCount:  firecracker.Int64(1),
-			Smt:        firecracker.Bool(false),
-			MemSizeMib: firecracker.Int64(128),
-		},
-		JailerCfg: &firecracker.JailerConfig{
-			UID:            &uid,
-			GID:            &gid,
-			ID:             id,
-			NumaNode:       firecracker.Int(0),
-			JailerBinary:   base_dir + "jailer",
-			ChrootBaseDir:  jailer_sandbox,
-			ChrootStrategy: firecracker.NewNaiveChrootStrategy(kernelImagePath),
-			ExecFile:       base_dir + "firecracker-v1.10.1-x86_64",
-			CgroupVersion:  "2",
-			Stdin:          nil,
-			Stdout:         io.Discard,
-			Stderr:         io.Discard,
-			CgroupArgs:     []string{},
-		},
-		Seccomp:           firecracker.SeccompConfig{Enabled: true},
-		NetworkInterfaces: nil,
-		VsockDevices: []firecracker.VsockDevice{
-			{
-				Path: "./vsock.sock",
-				CID:  3,
-			},
-		},
-	}
-
-	// Mark the rootfs as read-only
-	fcCfg.Drives[0].IsReadOnly = firecracker.Bool(true)
 
 	// Check if kernel image is readable
 	// f, err := os.Open(fcCfg.KernelImagePath)
@@ -84,7 +40,58 @@ func main() {
 	// }
 	// f.Close()
 	timeFunc(func() {
-		createAndRunVM(fcCfg)
+		wg := sync.WaitGroup{}
+		for i := range 3 {
+			wg.Add(1)
+			id := uuid.New().String()
+			fcCfg := firecracker.Config{
+				SocketPath:      "api.socket",
+				KernelImagePath: kernelImagePath,
+				//console=ttyS0 quiet
+				KernelArgs: "console=ttyS0 quiet reboot=k panic=1 pci=off overlay_root=ram init=/sbin/overlay-init",
+				// KernelArgs: "console=ttyS0 quiet reboot=k panic=1 pci=off nomodules random.trust_cpu=on i8042.noaux i8042.nomux i8042.nopnp i8042.nokbd overlay_root=ram init=/sbin/overlay-init",
+				// KernelArgs: "console=ttyS0 reboot=k panic=1 pci=off init=/sbin/overlay-init",
+				Drives:   firecracker.NewDrivesBuilder(base_dir + "rootfs/testing/image.img").Build(),
+				LogLevel: "Error",
+				MachineCfg: models.MachineConfiguration{
+					VcpuCount:  firecracker.Int64(1),
+					Smt:        firecracker.Bool(false),
+					MemSizeMib: firecracker.Int64(128),
+				},
+				JailerCfg: &firecracker.JailerConfig{
+					UID:            &uid,
+					GID:            &gid,
+					ID:             id,
+					NumaNode:       firecracker.Int(0),
+					JailerBinary:   base_dir + "jailer",
+					ChrootBaseDir:  jailer_sandbox,
+					ChrootStrategy: firecracker.NewNaiveChrootStrategy(kernelImagePath),
+					ExecFile:       base_dir + "firecracker-v1.10.1-x86_64",
+					CgroupVersion:  "2",
+					Stdin:          nil,
+					Stdout:         io.Discard,
+					Stderr:         io.Discard,
+					CgroupArgs:     []string{},
+				},
+				Seccomp:           firecracker.SeccompConfig{Enabled: true},
+				NetworkInterfaces: nil,
+				VsockDevices: []firecracker.VsockDevice{
+					{
+						Path: "./vsock.sock",
+						CID:  3,
+					},
+				},
+			}
+
+			// Mark the rootfs as read-only
+			fcCfg.Drives[0].IsReadOnly = firecracker.Bool(true)
+			fmt.Printf("Starting VM %d with ID %s\n", i+1, id)
+			go func() {
+				defer wg.Done()
+				createAndRunVM(fcCfg)
+			}()
+		}
+		wg.Wait()
 	})
 	// Check each drive is readable and writable
 	// for _, drive := range fcCfg.Drives {
@@ -135,66 +142,20 @@ func createAndRunVM(fcCfg firecracker.Config) error {
 			fmt.Println("Error:", err)
 			return
 		}
-		// upload the code
-		code, err := os.ReadFile("test.sh")
+		out, err := vmClient.ExecuteCommand(&slammer_rpc.ExecArgs{
+			Command:        "/bin/bash",
+			Args:           []string{"-c", "echo hello from " + m.Cfg.JailerCfg.ID},
+			UID:            1000,
+			GID:            1000,
+			WorkDir:        "/home/user",
+			Env:            []string{},
+			ShutdownOnExit: true,
+		})
 		if err != nil {
 			fmt.Println("Error:", err)
 			return
 		}
-		err = vmClient.UploadFile("/home/user/hello.sh", code)
-		if err != nil {
-			fmt.Println("Error:", err)
-			return
-		}
-		code, err = os.ReadFile("test.py")
-		if err != nil {
-			fmt.Println("Error:", err)
-			return
-		}
-		err = vmClient.UploadFile("/home/user/hello.py", code)
-
-		if err != nil {
-			fmt.Println("Error:", err)
-			return
-		}
-		out, err := vmClient.ExecuteCommand(
-			&slammer_rpc.ExecArgs{
-				Command:        "/usr/bin/python3",
-				Args:           []string{"hello.py"},
-				UID:            1000,
-				GID:            1000,
-				WorkDir:        "/home/user",
-				Env:            []string{"SECRET=messages_are_calling_to_me_endlessly"},
-				ShutdownOnExit: false,
-			},
-		)
-		if err != nil {
-			fmt.Println("ErrorExec:", err)
-		}
-		if out != nil {
-			fmt.Printf("Output:\n%v\n", string(out.Stdout))
-			fmt.Printf("StdError:\n%v\n", string(out.Stderr))
-			fmt.Printf("ExitCode: %v\n", out.ExitCode)
-		}
-		out, err = vmClient.ExecuteCommand(
-			&slammer_rpc.ExecArgs{
-				Command:        "/bin/bash",
-				Args:           []string{"hello.sh"},
-				UID:            1000,
-				GID:            1000,
-				WorkDir:        "/home/user",
-				Env:            []string{"SECRET=messages_are_calling_to_me_endlessly"},
-				ShutdownOnExit: true,
-			},
-		)
-		if err != nil {
-			fmt.Println("Error:", err)
-		}
-		if out != nil {
-			fmt.Printf("Output:\n%v\n", string(out.Stdout))
-			fmt.Printf("StdError:\n%v\n", string(out.Stderr))
-			fmt.Printf("ExitCode: %v\n", out.ExitCode)
-		}
+		fmt.Println("Output:", string(out.Stdout))
 	}()
 	defer m.StopVMM()
 	defer wg.Wait()

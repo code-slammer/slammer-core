@@ -6,6 +6,7 @@ import (
 	"syscall"
 
 	"net/rpc"
+	"net/rpc/jsonrpc"
 
 	slammer_rpc "github.com/code-slammer/slammer-core/rpc"
 	"github.com/mdlayher/vsock"
@@ -29,7 +30,21 @@ func main() {
 	defer conn.Close()
 	fmt.Println("Listening on vsock port 1024")
 
-	rpc.Accept(conn)
+	for {
+		clientConn, err := conn.Accept()
+		if err != nil {
+			log.Printf("Error accepting connection: %v", err)
+			continue
+		}
+
+		// Handle each connection in a new goroutine using JSON-RPC
+		go jsonrpc.ServeConn(clientConn)
+
+		/* NOTE: We are using jsonrpc for the codec because by default
+		the net/rpc package uses gob, which could have potential DOS issues.
+		See: https://pkg.go.dev/encoding/gob#hdr-Security
+		*/
+	}
 }
 
 var vsock_listener *vsock.Listener
