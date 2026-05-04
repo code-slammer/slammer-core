@@ -1,11 +1,11 @@
 module github.com/code-slammer/slammer-core
 
-go 1.23.5
+go 1.24.4
 
 require (
 	github.com/firecracker-microvm/firecracker-go-sdk v1.0.1-0.20250226173405-3a6ac021e56d
 	github.com/mdlayher/vsock v1.2.1
-	github.com/sirupsen/logrus v1.9.3
+	github.com/sirupsen/logrus v1.9.4
 )
 
 require (

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"math"
@@ -11,7 +12,8 @@ import (
 	"sync"
 	"time"
 
-	slammer_rpc "github.com/code-slammer/slammer-core/rpc"
+	"github.com/code-slammer/slammer-core/internal/agentapi"
+	"github.com/code-slammer/slammer-core/internal/agentclient"
 	"github.com/firecracker-microvm/firecracker-go-sdk"
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/models"
 	"github.com/google/uuid"
@@ -33,6 +35,11 @@ func main() {
 	cleanup(jailer_sandbox)
 
 	kernelImagePath := base_dir + "vmlinux-6.1.155"
+	bootImagePath := getenvDefault("BOOT_IMAGE_PATH", base_dir+"boot-init.ext4")
+	targetImagePath := os.Getenv("TARGET_IMAGE_PATH")
+	if targetImagePath == "" {
+		panic("TARGET_IMAGE_PATH is not set")
+	}
 
 	uid := 123
 	gid := 123
@@ -75,12 +82,9 @@ func main() {
 			fcCfg := firecracker.Config{
 				SocketPath:      "api.socket",
 				KernelImagePath: kernelImagePath,
-				//console=ttyS0 quiet
-				KernelArgs: "quiet reboot=k panic=1 pci=off overlay_root=ram init=/sbin/overlay-init",
-				// KernelArgs: "console=ttyS0 reboot=k panic=1 pci=off nomodules random.trust_cpu=on i8042.noaux i8042.nomux i8042.nopnp i8042.nokbd overlay_root=ram init=/sbin/overlay-init",
-				// KernelArgs: "console=ttyS0 reboot=k panic=1 pci=off init=/sbin/overlay-init",
-				Drives:   firecracker.NewDrivesBuilder(base_dir + "rootfs/testing/image.img").Build(),
-				LogLevel: "Debug",
+				KernelArgs:      "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init target_drive=/dev/vdb",
+				Drives:          vmDrives(bootImagePath, targetImagePath),
+				LogLevel:        "Debug",
 				MachineCfg: models.MachineConfiguration{
 					VcpuCount:  firecracker.Int64(int64(NUM_VCPU)),
 					Smt:        firecracker.Bool(false),
@@ -111,8 +115,6 @@ func main() {
 				},
 			}
 
-			// Mark the rootfs as read-only
-			fcCfg.Drives[0].IsReadOnly = firecracker.Bool(true)
 			fmt.Printf("Starting VM %d with ID %s\n", i+1, id)
 			go func() {
 				defer wg.Done()
@@ -160,35 +162,46 @@ func createAndRunVM(fcCfg firecracker.Config) error {
 		jailer_dir := m.Cfg.JailerCfg.ChrootBaseDir
 		socket_path := path.Join(jailer_dir, FIRECRACKER_VERSION, m.Cfg.JailerCfg.ID, "root", "vsock.sock")
 		// make a new child context with a timeout
+		vmClient := agentclient.NewFirecrackerVsock(socket_path, agentclient.DefaultVsockPort)
 		vmServiceCtx, cancel := context.WithTimeout(vmmCtx, VM_TIMEOUT)
-		vmClient := NewVMClient(socket_path)
-		defer vmClient.Close()
-		err := vmClient.Connect(vmServiceCtx, 10*time.Millisecond)
+		if err := waitForAgent(vmServiceCtx, vmClient, 10*time.Millisecond); err != nil {
+			cancel()
+			fmt.Println("Error:", err)
+			return
+		}
+		contents, err := os.ReadFile("test.py")
+		if err != nil {
+			cancel()
+			fmt.Println("Error:", err)
+			return
+		}
+		uid, gid := 1000, 1000
+		out, err := vmClient.Jobs(vmServiceCtx, agentapi.BatchRequest{
+			Version:   agentapi.Version,
+			Workspace: "/workspace",
+			Defaults: agentapi.JobDefaults{
+				UID:            &uid,
+				GID:            &gid,
+				Env:            []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+				TimeoutMillis:  5_000,
+				MaxOutputBytes: 1 << 20,
+			},
+			Jobs: []agentapi.Job{
+				{Type: agentapi.JobMkdir, Path: "/workspace", Mode: 0o755},
+				{Type: agentapi.JobWriteFile, Path: "/workspace/test.py", Mode: 0o644, ContentsBase64: base64.StdEncoding.EncodeToString(contents)},
+				{Type: agentapi.JobExec, Argv: []string{"/usr/bin/python3", "test.py"}, WorkingDir: "/workspace"},
+			},
+			Shutdown: true,
+		})
 		cancel()
 		if err != nil {
 			fmt.Println("Error:", err)
+			if out != nil {
+				fmt.Printf("Results: %+v\n", out.Results)
+			}
 			return
 		}
-		contents, _ := os.ReadFile("test.py")
-		vmClient.UploadFile("/home/user/test.py", contents)
-		out, err := vmClient.ExecuteCommand(&slammer_rpc.ExecArgs{
-			// Command:        "/bin/bash",
-			Command: "/usr/bin/python3",
-			// Args:           []string{"-c", "sysbench cpu run"},
-			Args:           []string{"test.py"},
-			UID:            1000,
-			GID:            1000,
-			WorkDir:        "/home/user",
-			Env:            []string{},
-			ShutdownOnExit: true,
-		})
-		if err != nil {
-			fmt.Println("Error:", err)
-			return
-		}
-		fmt.Println("Output:", string(out.Stdout))
-		fmt.Print("Stderr:", string(out.Stderr))
-		fmt.Println("Exit code:", out.ExitCode)
+		printResults(out)
 
 	}()
 	defer m.StopVMM()
@@ -219,6 +232,59 @@ func createAndRunVM(fcCfg firecracker.Config) error {
 		fmt.Println("timeout")
 	}
 	return nil
+}
+
+func vmDrives(bootImagePath, targetImagePath string) []models.Drive {
+	return []models.Drive{
+		{
+			DriveID:      firecracker.String("boot"),
+			PathOnHost:   firecracker.String(bootImagePath),
+			IsRootDevice: firecracker.Bool(true),
+			IsReadOnly:   firecracker.Bool(true),
+		},
+		{
+			DriveID:      firecracker.String("target"),
+			PathOnHost:   firecracker.String(targetImagePath),
+			IsRootDevice: firecracker.Bool(false),
+			IsReadOnly:   firecracker.Bool(true),
+		},
+	}
+}
+
+func waitForAgent(ctx context.Context, client *agentclient.Client, sleepDelay time.Duration) error {
+	for {
+		if err := client.Health(ctx); err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(sleepDelay):
+		}
+	}
+}
+
+func printResults(out *agentapi.BatchResponse) {
+	for _, result := range out.Results {
+		if result.Type != agentapi.JobExec {
+			continue
+		}
+		stdout, _ := base64.StdEncoding.DecodeString(result.StdoutBase64)
+		stderr, _ := base64.StdEncoding.DecodeString(result.StderrBase64)
+		fmt.Println("Output:", string(stdout))
+		fmt.Print("Stderr:", string(stderr))
+		fmt.Println("Exit code:", result.ExitCode)
+		if result.TimedOut {
+			fmt.Println("Timed out")
+		}
+	}
+}
+
+func getenvDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func cleanup(jailer_sandbox string) {

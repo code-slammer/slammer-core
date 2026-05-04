@@ -67,3 +67,10 @@ Build current guest binaries:
 CGO_ENABLED=0 go build -o /tmp/init -ldflags "-w -s" ./cmd/init
 CGO_ENABLED=0 go build -o /tmp/agent -ldflags "-w -s" ./cmd/agent
 ```
+
+Current host prototype:
+- `main.go` still reads `.env` through `godotenv` and requires `BASE_DIR`.
+- `BOOT_IMAGE_PATH` defaults to `${BASE_DIR}boot-init.ext4`.
+- `TARGET_IMAGE_PATH` is required and is attached as the read-only secondary drive.
+- Kernel args expect the trusted boot image to provide `/init` and the target image to appear as `/dev/vdb`.
+- The host waits for `GET /healthz`, then sends one `POST /jobs` request through `internal/agentclient`.

@@ -2,9 +2,9 @@
 
 ## Current Repo Shape
 - Root Go module is `github.com/code-slammer/slammer-core`; guest commands now build from this module under `cmd/init` and `cmd/agent`.
-- `main.go` is the current host Firecracker prototype entrypoint and reads `.env` via `godotenv`; `BASE_DIR` must be set and the code expects it to have a trailing slash.
+- `main.go` is the current host Firecracker prototype entrypoint and reads `.env` via `godotenv`; `BASE_DIR` must be set with a trailing slash, `BOOT_IMAGE_PATH` defaults to `${BASE_DIR}boot-init.ext4`, and `TARGET_IMAGE_PATH` is required.
 - `cmd/init` is the trusted guest PID 1 prototype; `cmd/agent` is the guest HTTP-over-vsock job agent.
-- `rpc/` and root `rpc.go` are legacy JSON-RPC prototype code still used by the old `main.go`; new guest control-plane work should use `internal/agentapi`, `internal/agentserver`, and `internal/agentclient`.
+- Guest control-plane work should use `internal/agentapi`, `internal/agentserver`, and `internal/agentclient`; the old `net/rpc/jsonrpc` prototype has been removed.
 
 ## Commands
 - Root module verification: `go test ./...` from repo root.
@@ -27,5 +27,4 @@
 - Target OCI rootfs images are immutable artifacts: host only mounts them writable during initial materialization, Firecracker attaches them read-only, and guest writes must go to tmpfs-backed overlay upper/work dirs.
 
 ## Missing Project Infrastructure
-- There is no README, CI workflow, Makefile, formatter config, lint config, or existing instruction file in the current checkout.
-- There are no `_test.go` files yet; `go test ./...` currently only validates package compilation.
+- There is no README, CI workflow, Makefile, formatter config, or lint config in the current checkout.
