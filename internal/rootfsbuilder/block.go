@@ -60,7 +60,7 @@ func (ShellBlockImageManager) MountImage(ctx context.Context, path string, targe
 		_ = exec.CommandContext(ctx, "losetup", "-d", loop).Run()
 		return nil, fmt.Errorf("mount: %w: %s", err, output)
 	}
-	return shellLoopHandle{device: loop}, nil
+	return &shellLoopHandle{device: loop}, nil
 }
 
 func (ShellBlockImageManager) Unmount(ctx context.Context, target string) error {
@@ -73,13 +73,18 @@ func (ShellBlockImageManager) Unmount(ctx context.Context, target string) error 
 
 type shellLoopHandle struct {
 	device string
+	closed bool
 }
 
-func (h shellLoopHandle) Close(ctx context.Context) error {
+func (h *shellLoopHandle) Close(ctx context.Context) error {
+	if h.closed {
+		return nil
+	}
 	cmd := exec.CommandContext(ctx, "losetup", "-d", h.device)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("losetup detach: %w: %s", err, output)
 	}
+	h.closed = true
 	return nil
 }
 

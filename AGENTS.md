@@ -10,7 +10,7 @@
 - Root module verification: `go test ./...` from repo root.
 - Build trusted guest init: `CGO_ENABLED=0 go build -o /tmp/init -ldflags "-w -s" ./cmd/init`.
 - Build trusted guest agent: `CGO_ENABLED=0 go build -o /tmp/agent -ldflags "-w -s" ./cmd/agent`.
-- Prepare-image prototype: `go run ./cmd/sandboxd prepare-image --store-dir /var/lib/sandbox-runtime docker.io/library/python:3.12-slim`; cold ext4 materialization is not implemented yet, but OCI index/manifest resolution, pull/cache, file locking, and hot rootfs lookup are wired.
+- Prepare-image prototype: `go run ./cmd/sandboxd prepare-image --store-dir /var/lib/sandbox-runtime docker.io/library/python:3.12-slim`; rootfs ext4 materialization is pure Go via `go-diskfs`, so no `mkfs.ext4`, loop device, mount, or root privilege is needed if the store dir is writable.
 - `image/build_image.sh` uses Docker, `sudo`, and `mksquashfs`, writes to `~/rootfs/testing/image.img`, and removes `/tmp/myfs`; do not run it casually.
 - Agent control-plane details are in `docs/agent-control-plane.md`.
 - Runtime pull/cache details are in `docs/runtime.md`.

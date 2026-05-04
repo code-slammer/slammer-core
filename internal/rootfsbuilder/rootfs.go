@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,9 +15,14 @@ import (
 	"github.com/code-slammer/slammer-core/internal/oci"
 )
 
+const (
+	defaultMinRootfsSize = 2 << 30
+	defaultExtraSize     = 512 << 20
+)
+
 type Store struct {
 	content *contentstore.Store
-	block   BlockImageManager
+	builder RootfsImageBuilder
 }
 
 type Rootfs struct {
@@ -36,7 +42,7 @@ type Metadata struct {
 }
 
 func New(storeDir string) *Store {
-	return &Store{content: contentstore.New(storeDir), block: ShellBlockImageManager{}}
+	return &Store{content: contentstore.New(storeDir), builder: PureGoExt4Builder{}}
 }
 
 func (s *Store) EnsureRootfs(ctx context.Context, img *oci.PulledImage) (*Rootfs, error) {
@@ -56,7 +62,42 @@ func (s *Store) EnsureRootfs(ctx context.Context, img *oci.PulledImage) (*Rootfs
 	if _, err := os.Stat(path); err == nil {
 		return &Rootfs{ChainID: chainID, Path: path}, nil
 	}
-	return nil, fmt.Errorf("rootfs cold build for %s is not implemented yet", chainID)
+	if err := s.build(ctx, img, chainID, path); err != nil {
+		return nil, err
+	}
+	return &Rootfs{ChainID: chainID, Path: path}, nil
+}
+
+func (s *Store) build(ctx context.Context, img *oci.PulledImage, chainID string, completePath string) error {
+	if err := os.MkdirAll(filepath.Dir(completePath), 0o755); err != nil {
+		return err
+	}
+	buildingPath := s.content.RootfsBuildingPath(chainID)
+	if err := os.MkdirAll(filepath.Dir(buildingPath), 0o755); err != nil {
+		return err
+	}
+	_ = os.Remove(buildingPath)
+
+	size := estimateRootfsSize(img)
+	cleanupTmp := true
+	defer func() {
+		if cleanupTmp {
+			_ = os.Remove(buildingPath)
+		}
+	}()
+
+	if err := s.builder.Build(ctx, img, buildingPath, size); err != nil {
+		return err
+	}
+
+	if err := os.Rename(buildingPath, completePath); err != nil {
+		return err
+	}
+	cleanupTmp = false
+	if err := s.WriteMetadata(img, chainID, size); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) WriteMetadata(img *oci.PulledImage, chainID string, sizeBytes int64) error {
@@ -86,4 +127,16 @@ func ComputeChainID(diffIDs []string) (string, error) {
 	}
 	hash := sha256.Sum256([]byte(strings.Join(diffIDs, "\n")))
 	return "sha256:" + hex.EncodeToString(hash[:]), nil
+}
+
+func estimateRootfsSize(img *oci.PulledImage) int64 {
+	var compressedTotal int64
+	for _, layer := range img.Layers {
+		compressedTotal += layer.Size
+	}
+	size := compressedTotal*4 + defaultExtraSize
+	if size < defaultMinRootfsSize {
+		return defaultMinRootfsSize
+	}
+	return size
 }

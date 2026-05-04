@@ -16,11 +16,17 @@ Implemented now:
 - Computes the rootfs chain ID from ordered config `rootfs.diff_ids`.
 - Returns immediately if `rootfs/complete/<chain-id>.ext4` already exists.
 - Uses a chain-ID file lock before entering the cold build path.
-- Defines a replaceable block image manager interface with a shell-backed `mkfs.ext4`/`losetup`/`mount` implementation.
+- Materializes cold rootfs images as sparse ext4 files in pure Go using `github.com/diskfs/go-diskfs`; no `mkfs.ext4`, loop device, or mount is required for rootfs preparation.
+- Applies gzip or uncompressed OCI tar layers, verifies uncompressed diff IDs, handles whiteouts and opaque directories, and rejects traversal/symlink-parent escapes.
 
 Not implemented yet:
-- Cold ext4 rootfs materialization from layers.
-- Layer extraction and whiteout handling.
+- zstd-compressed layers.
+- xattr preservation such as `security.capability`.
+- Device node extraction; device and FIFO entries are rejected by default.
+
+Cold build prerequisites:
+- Root is not required for local rootfs image creation when the store directory is writable.
+- The generated ext4 files are sparse; use apparent-size-aware tools when inspecting disk usage.
 
 Store layout:
 
