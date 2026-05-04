@@ -10,8 +10,10 @@
 - Root module verification: `go test ./...` from repo root.
 - Build trusted guest init: `CGO_ENABLED=0 go build -o /tmp/init -ldflags "-w -s" ./cmd/init`.
 - Build trusted guest agent: `CGO_ENABLED=0 go build -o /tmp/agent -ldflags "-w -s" ./cmd/agent`.
+- Prepare-image prototype: `go run ./cmd/sandboxd prepare-image --store-dir /var/lib/sandbox-runtime docker.io/library/python:3.12-slim`; cold ext4 materialization is not implemented yet, but OCI index/manifest resolution, pull/cache, file locking, and hot rootfs lookup are wired.
 - `image/build_image.sh` uses Docker, `sudo`, and `mksquashfs`, writes to `~/rootfs/testing/image.img`, and removes `/tmp/myfs`; do not run it casually.
 - Agent control-plane details are in `docs/agent-control-plane.md`.
+- Runtime pull/cache details are in `docs/runtime.md`.
 
 ## Architecture Direction
 - Target architecture is a small Go runtime that replaces containerd/Docker state for this workflow: pull/cache OCI blobs, materialize a cached immutable ext4 rootfs by chain ID, then launch Firecracker with a trusted boot/init image plus the cached target image as a read-only secondary drive.
