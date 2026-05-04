@@ -19,7 +19,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const FIRECRACKER_VERSION = "firecracker-v1.11.0-x86_64"
+const FIRECRACKER_VERSION = "firecracker-v1.15.0-x86_64"
 
 func main() {
 	must(godotenv.Load())
@@ -32,7 +32,7 @@ func main() {
 	jailer_sandbox := "/srv/jailer/"
 	cleanup(jailer_sandbox)
 
-	kernelImagePath := base_dir + "kernel/vmlinux-6.1.102"
+	kernelImagePath := base_dir + "vmlinux-6.1.155"
 
 	uid := 123
 	gid := 123
