@@ -17,7 +17,8 @@ import (
 const DefaultVsockPort = 1024
 
 type Client struct {
-	http *http.Client
+	http    *http.Client
+	baseURL string
 }
 
 func NewWithDialer(dialContext func(context.Context, string, string) (net.Conn, error)) *Client {
@@ -26,7 +27,14 @@ func NewWithDialer(dialContext func(context.Context, string, string) (net.Conn, 
 		DisableKeepAlives:     true,
 		ResponseHeaderTimeout: 30 * time.Second,
 	}
-	return &Client{http: &http.Client{Transport: transport}}
+	return &Client{http: &http.Client{Transport: transport}, baseURL: "http://vm"}
+}
+
+func NewHTTP(httpClient *http.Client, baseURL string) *Client {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return &Client{http: httpClient, baseURL: baseURL}
 }
 
 func NewFirecrackerVsock(socketPath string, port int) *Client {
@@ -57,7 +65,7 @@ func NewFirecrackerVsock(socketPath string, port int) *Client {
 }
 
 func (c *Client) Health(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://vm/healthz", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/healthz", nil)
 	if err != nil {
 		return err
 	}
@@ -77,7 +85,7 @@ func (c *Client) Jobs(ctx context.Context, request agentapi.BatchRequest) (*agen
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://vm/jobs", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/jobs", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

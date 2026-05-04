@@ -8,6 +8,21 @@ Current command:
 go run ./cmd/sandboxd prepare-image --store-dir /var/lib/sandbox-runtime docker.io/library/python:3.12-slim
 ```
 
+Local demo without Firecracker:
+
+```sh
+go run ./cmd/sandboxd demo-local --store-dir ./tmp/sandbox-runtime-demo
+```
+
+The demo prepares `alpine:latest`, verifies expected directories inside the generated ext4 image without mounting it, then runs a batched `write_file` plus `exec` request against the agent HTTP API in-process.
+
+Inspect a generated ext4 image without mounting it:
+
+```sh
+go run ./cmd/sandboxd inspect-rootfs --ls / ./tmp/sandbox-runtime/rootfs/complete/<chain-id>.ext4
+go run ./cmd/sandboxd inspect-rootfs --read /etc/alpine-release ./tmp/sandbox-runtime/rootfs/complete/<chain-id>.ext4
+```
+
 Implemented now:
 - Creates the runtime store layout.
 - Resolves OCI image indexes and manifests for a selected platform with `go-containerregistry`.
@@ -18,6 +33,7 @@ Implemented now:
 - Uses a chain-ID file lock before entering the cold build path.
 - Materializes cold rootfs images as sparse ext4 files in pure Go using `github.com/diskfs/go-diskfs`; no `mkfs.ext4`, loop device, or mount is required for rootfs preparation.
 - Applies gzip or uncompressed OCI tar layers, verifies uncompressed diff IDs, handles whiteouts and opaque directories, and rejects traversal/symlink-parent escapes.
+- Can inspect generated ext4 rootfs images in pure Go with `sandboxd inspect-rootfs`.
 
 Not implemented yet:
 - zstd-compressed layers.
