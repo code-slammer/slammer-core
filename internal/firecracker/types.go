@@ -24,6 +24,25 @@ type StartVMRequest struct {
 	Jobs            []agentapi.Job
 	Shutdown        bool
 	Timeout         time.Duration
+	Snapshot        *SnapshotArtifact
+}
+
+type SnapshotRequest struct {
+	ID              string
+	StoreDir        string
+	FirecrackerPath string
+	KernelPath      string
+	BootImagePath   string
+	TargetImagePath string
+	MachineConfig   MachineConfig
+	VsockCID        uint32
+	Timeout         time.Duration
+	Snapshot        SnapshotArtifact
+}
+
+type SnapshotArtifact struct {
+	MemPath      string
+	SnapshotPath string
 }
 
 type RunResult struct {

@@ -13,6 +13,7 @@
 - Build trusted boot image: `go run ./cmd/sandboxd build-boot-image --init /tmp/init --agent /tmp/agent --output ./tmp/boot-init.ext4`.
 - Prepare-image prototype: `go run ./cmd/sandboxd prepare-image --store-dir /var/lib/sandbox-runtime docker.io/library/python:3.12-slim`; rootfs ext4 materialization is pure Go via `go-diskfs`, so no `mkfs.ext4`, loop device, mount, or root privilege is needed if the store dir is writable.
 - VM run command shape: `go run ./cmd/sandboxd run --store-dir ./tmp/sandbox-runtime --kernel /path/to/vmlinux --boot-image ./tmp/boot-init.ext4 --firecracker-bin /path/to/firecracker docker.io/library/alpine:latest -- /bin/sh -c 'echo hi'`.
+- Snapshot path: `go run ./cmd/sandboxd create-snapshot --store-dir ./tmp/sandbox-runtime --kernel /path/to/vmlinux --boot-image ./tmp/boot-init.ext4 --firecracker-bin /path/to/firecracker --snapshot-dir ./tmp/snapshots docker.io/library/alpine:latest`, then add `--snapshot-dir ./tmp/snapshots` to `sandboxd run`.
 - Local non-Firecracker demo: `go run ./cmd/sandboxd demo-local --store-dir ./tmp/sandbox-runtime-demo` prepares Alpine, inspects the ext4 image, and exercises the batched agent HTTP API in-process.
 - `image/build_image.sh` uses Docker, `sudo`, and `mksquashfs`, writes to `~/rootfs/testing/image.img`, and removes `/tmp/myfs`; do not run it casually.
 - Agent control-plane details are in `docs/agent-control-plane.md`.

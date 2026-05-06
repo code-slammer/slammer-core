@@ -89,7 +89,13 @@ func StartVM(ctx context.Context, req StartVMRequest) (*RunResult, error) {
 		WithStdout(io.Discard).
 		WithStderr(io.Discard).
 		Build(ctx)
-	machine, err := sdk.NewMachine(ctx, fcCfg, sdk.WithLogger(entry), sdk.WithProcessRunner(cmd))
+	opts := []sdk.Opt{sdk.WithLogger(entry), sdk.WithProcessRunner(cmd)}
+	if req.Snapshot != nil {
+		opts = append(opts, sdk.WithSnapshot(req.Snapshot.MemPath, req.Snapshot.SnapshotPath, func(cfg *sdk.SnapshotConfig) {
+			cfg.ResumeVM = true
+		}))
+	}
+	machine, err := sdk.NewMachine(ctx, fcCfg, opts...)
 	if err != nil {
 		return nil, err
 	}

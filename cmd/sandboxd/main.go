@@ -39,6 +39,8 @@ func main() {
 		demoLocal(os.Args[2:])
 	case "run":
 		runVM(os.Args[2:])
+	case "create-snapshot":
+		createSnapshot(os.Args[2:])
 	case "build-boot-image":
 		buildBootImage(os.Args[2:])
 	default:
@@ -102,6 +104,7 @@ func runVM(args []string) {
 	gid := fs.Int("gid", 0, "guest gid for exec job")
 	workdir := fs.String("workdir", "/workspace", "guest working directory under /workspace")
 	timeout := fs.Duration("timeout", 60*time.Second, "VM/job timeout")
+	snapshotDir := fs.String("snapshot-dir", "", "directory for ready snapshot artifacts; existing snapshots are restored")
 	if err := fs.Parse(args); err != nil {
 		fatal(err)
 	}
@@ -154,6 +157,26 @@ func runVM(args []string) {
 		}
 	}
 	jobWorkdir := *workdir
+	var snapshot *sandboxfirecracker.SnapshotArtifact
+	if *snapshotDir != "" {
+		snapshot = snapshotArtifact(*snapshotDir, prepared.ChainID)
+		if !snapshotExists(snapshot) {
+			snapStart := time.Now()
+			if _, err := sandboxfirecracker.CreateReadySnapshot(ctx, sandboxfirecracker.SnapshotRequest{
+				StoreDir:        *storeDir,
+				FirecrackerPath: resolvedFirecracker,
+				KernelPath:      *kernelPath,
+				BootImagePath:   *bootImagePath,
+				TargetImagePath: prepared.RootfsPath,
+				MachineConfig:   sandboxfirecracker.MachineConfig{VCPUCount: *vcpu, MemSizeMiB: *mem},
+				Timeout:         *timeout,
+				Snapshot:        *snapshot,
+			}); err != nil {
+				fatal(err)
+			}
+			fmt.Fprintf(os.Stderr, "snapshot_create: %s\n", time.Since(snapStart))
+		}
+	}
 
 	result, err := sandboxfirecracker.StartVM(ctx, sandboxfirecracker.StartVMRequest{
 		StoreDir:        *storeDir,
@@ -170,6 +193,7 @@ func runVM(args []string) {
 		},
 		Shutdown: true,
 		Timeout:  *timeout,
+		Snapshot: snapshot,
 	})
 	if err != nil {
 		fatal(err)
@@ -179,6 +203,76 @@ func runVM(args []string) {
 	if code := exitCodeFromResults(result.Results); code != 0 {
 		os.Exit(code)
 	}
+}
+
+func createSnapshot(args []string) {
+	fs := flag.NewFlagSet("create-snapshot", flag.ExitOnError)
+	storeDir := fs.String("store-dir", config.DefaultStoreDir, "runtime store directory")
+	kernelPath := fs.String("kernel", config.DefaultKernelPath, "Firecracker kernel image path")
+	bootImagePath := fs.String("boot-image", config.DefaultBootImagePath, "trusted boot/init ext4 image path")
+	firecrackerPath := fs.String("firecracker-bin", "firecracker", "Firecracker binary path")
+	snapshotDir := fs.String("snapshot-dir", filepath.Join("tmp", "snapshots"), "snapshot artifact directory")
+	vcpu := fs.Int("vcpu", 1, "vCPU count")
+	mem := fs.Int("mem-mib", 256, "memory size in MiB")
+	timeout := fs.Duration("timeout", 60*time.Second, "snapshot creation timeout")
+	if err := fs.Parse(args); err != nil {
+		fatal(err)
+	}
+	if fs.NArg() != 1 {
+		fatal(fmt.Errorf("usage: sandboxd create-snapshot [flags] IMAGE_REF"))
+	}
+	imageRef := fs.Arg(0)
+	resolvedFirecracker, err := preflightVMRun(*firecrackerPath, *kernelPath, *bootImagePath)
+	if err != nil {
+		fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout+2*time.Minute)
+	defer cancel()
+	rt := sandboxruntime.New(config.Config{StoreDir: *storeDir, KernelPath: *kernelPath, BootImagePath: *bootImagePath})
+	prepared, err := rt.PrepareImage(ctx, imageRef, config.Platform{OS: config.DefaultPlatformOS, Architecture: config.DefaultArchitecture})
+	if err != nil {
+		fatal(err)
+	}
+	snapshot := snapshotArtifact(*snapshotDir, prepared.ChainID)
+	created, err := sandboxfirecracker.CreateReadySnapshot(ctx, sandboxfirecracker.SnapshotRequest{
+		StoreDir:        *storeDir,
+		FirecrackerPath: resolvedFirecracker,
+		KernelPath:      *kernelPath,
+		BootImagePath:   *bootImagePath,
+		TargetImagePath: prepared.RootfsPath,
+		MachineConfig:   sandboxfirecracker.MachineConfig{VCPUCount: *vcpu, MemSizeMiB: *mem},
+		Timeout:         *timeout,
+		Snapshot:        *snapshot,
+	})
+	if err != nil {
+		fatal(err)
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(created); err != nil {
+		fatal(err)
+	}
+}
+
+func snapshotArtifact(snapshotDir string, chainID string) *sandboxfirecracker.SnapshotArtifact {
+	encoded := strings.TrimPrefix(chainID, "sha256:")
+	return &sandboxfirecracker.SnapshotArtifact{
+		MemPath:      filepath.Join(snapshotDir, encoded+".mem"),
+		SnapshotPath: filepath.Join(snapshotDir, encoded+".snapshot"),
+	}
+}
+
+func snapshotExists(snapshot *sandboxfirecracker.SnapshotArtifact) bool {
+	if snapshot == nil {
+		return false
+	}
+	if _, err := os.Stat(snapshot.MemPath); err != nil {
+		return false
+	}
+	if _, err := os.Stat(snapshot.SnapshotPath); err != nil {
+		return false
+	}
+	return true
 }
 
 func preflightVMRun(firecrackerPath, kernelPath, bootImagePath string) (string, error) {
