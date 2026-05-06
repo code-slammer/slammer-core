@@ -14,6 +14,7 @@ import (
 
 	"github.com/code-slammer/slammer-core/internal/agentapi"
 	"github.com/code-slammer/slammer-core/internal/agentclient"
+	sandboxfirecracker "github.com/code-slammer/slammer-core/internal/firecracker"
 	"github.com/firecracker-microvm/firecracker-go-sdk"
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/models"
 	"github.com/google/uuid"
@@ -82,8 +83,8 @@ func main() {
 			fcCfg := firecracker.Config{
 				SocketPath:      "api.socket",
 				KernelImagePath: kernelImagePath,
-				KernelArgs:      "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init target_drive=/dev/vdb",
-				Drives:          vmDrives(bootImagePath, targetImagePath),
+				KernelArgs:      sandboxfirecracker.DefaultKernelArgs,
+				Drives:          sandboxfirecracker.Drives(bootImagePath, targetImagePath),
 				LogLevel:        "Debug",
 				MachineCfg: models.MachineConfiguration{
 					VcpuCount:  firecracker.Int64(int64(NUM_VCPU)),
@@ -232,23 +233,6 @@ func createAndRunVM(fcCfg firecracker.Config) error {
 		fmt.Println("timeout")
 	}
 	return nil
-}
-
-func vmDrives(bootImagePath, targetImagePath string) []models.Drive {
-	return []models.Drive{
-		{
-			DriveID:      firecracker.String("boot"),
-			PathOnHost:   firecracker.String(bootImagePath),
-			IsRootDevice: firecracker.Bool(true),
-			IsReadOnly:   firecracker.Bool(true),
-		},
-		{
-			DriveID:      firecracker.String("target"),
-			PathOnHost:   firecracker.String(targetImagePath),
-			IsRootDevice: firecracker.Bool(false),
-			IsReadOnly:   firecracker.Bool(true),
-		},
-	}
 }
 
 func waitForAgent(ctx context.Context, client *agentclient.Client, sleepDelay time.Duration) error {

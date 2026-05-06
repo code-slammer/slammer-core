@@ -34,6 +34,7 @@ Implemented now:
 - Materializes cold rootfs images as sparse ext4 files in pure Go using `github.com/diskfs/go-diskfs`; no `mkfs.ext4`, loop device, or mount is required for rootfs preparation.
 - Applies gzip or uncompressed OCI tar layers, verifies uncompressed diff IDs, handles whiteouts and opaque directories, and rejects traversal/symlink-parent escapes.
 - Can inspect generated ext4 rootfs images in pure Go with `sandboxd inspect-rootfs`.
+- Firecracker drive config helpers live in `internal/firecracker`; the host attaches the trusted boot image as the root drive and the prepared OCI rootfs as a read-only secondary drive.
 
 Not implemented yet:
 - zstd-compressed layers.
