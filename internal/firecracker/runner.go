@@ -109,20 +109,15 @@ func StartVM(ctx context.Context, req StartVMRequest) (*RunResult, error) {
 	go func() {
 		localTimings := timings
 		client := agentclient.NewFirecrackerVsock(vsockPath, agentclient.DefaultVsockPort)
-		agentStart := time.Now()
-		if err := waitForAgent(runCtx, client, 25*time.Millisecond); err != nil {
-			errCh <- err
-			return
-		}
-		localTimings.AgentReadyDuration = time.Since(agentStart)
 		jobsStart := time.Now()
-		resp, err := client.Jobs(runCtx, agentapi.BatchRequest{
+		request := agentapi.BatchRequest{
 			Version:   agentapi.Version,
 			Workspace: req.Workspace,
 			Defaults:  req.Defaults,
 			Jobs:      req.Jobs,
 			Shutdown:  true,
-		})
+		}
+		resp, err := retryJobs(runCtx, client, request, 10*time.Millisecond)
 		if err != nil {
 			if resp != nil {
 				errCh <- fmt.Errorf("%w: %+v", err, resp.Results)
@@ -162,14 +157,20 @@ func StartVM(ctx context.Context, req StartVMRequest) (*RunResult, error) {
 	return result, nil
 }
 
-func waitForAgent(ctx context.Context, client *agentclient.Client, delay time.Duration) error {
+func retryJobs(ctx context.Context, client *agentclient.Client, request agentapi.BatchRequest, delay time.Duration) (*agentapi.BatchResponse, error) {
+	var lastErr error
 	for {
-		if err := client.Health(ctx); err == nil {
-			return nil
+		resp, err := client.Jobs(ctx, request)
+		if err == nil || resp != nil {
+			return resp, err
 		}
+		lastErr = err
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			if lastErr != nil {
+				return nil, fmt.Errorf("%w: last job attempt: %v", ctx.Err(), lastErr)
+			}
+			return nil, ctx.Err()
 		case <-time.After(delay):
 		}
 	}

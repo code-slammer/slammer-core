@@ -411,8 +411,10 @@ func printRunTimings(cacheHit bool, preflight time.Duration, prepare time.Durati
 	fmt.Fprintf(os.Stderr, "  read_oci_config: %s\n", readConfig)
 	fmt.Fprintf(os.Stderr, "  vm_setup: %s\n", vm.SetupDuration)
 	fmt.Fprintf(os.Stderr, "  firecracker_start: %s\n", vm.MachineStartDuration)
-	fmt.Fprintf(os.Stderr, "  agent_ready: %s\n", vm.AgentReadyDuration)
-	fmt.Fprintf(os.Stderr, "  jobs_request: %s\n", vm.JobsDuration)
+	if vm.AgentReadyDuration > 0 {
+		fmt.Fprintf(os.Stderr, "  agent_ready: %s\n", vm.AgentReadyDuration)
+	}
+	fmt.Fprintf(os.Stderr, "  jobs_request_with_agent_wait: %s\n", vm.JobsDuration)
 	fmt.Fprintf(os.Stderr, "  shutdown_wait: %s\n", vm.ShutdownWaitDuration)
 	fmt.Fprintf(os.Stderr, "  vm_total: %s\n", vm.TotalDuration)
 	fmt.Fprintf(os.Stderr, "  command_total: %s\n", total)
