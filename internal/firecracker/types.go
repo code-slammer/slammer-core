@@ -8,17 +8,38 @@ import (
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/models"
 )
 
-const DefaultKernelArgs = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init target_drive=/dev/vdb"
+const DefaultKernelArgs = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda ro init=/init target_drive=/dev/vdb"
 
 type StartVMRequest struct {
+	ID              string
+	StoreDir        string
+	FirecrackerPath string
 	KernelPath      string
 	BootImagePath   string
 	TargetImagePath string
 	MachineConfig   MachineConfig
 	VsockCID        uint32
+	Defaults        agentapi.JobDefaults
+	Workspace       string
 	Jobs            []agentapi.Job
 	Shutdown        bool
 	Timeout         time.Duration
+}
+
+type RunResult struct {
+	VM       VMHandle
+	Results  []agentapi.JobResult
+	TimedOut bool
+	Timings  RunTimings
+}
+
+type RunTimings struct {
+	SetupDuration        time.Duration
+	MachineStartDuration time.Duration
+	AgentReadyDuration   time.Duration
+	JobsDuration         time.Duration
+	ShutdownWaitDuration time.Duration
+	TotalDuration        time.Duration
 }
 
 type MachineConfig struct {

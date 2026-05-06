@@ -116,6 +116,17 @@ func TestJobsIsOneShot(t *testing.T) {
 	}
 }
 
+func TestJobsAllowsWorkspaceMkdir(t *testing.T) {
+	workspace := t.TempDir()
+	server := New(Config{Workspace: workspace, DefaultUID: os.Getuid(), DefaultGID: os.Getgid()})
+	req := agentapi.BatchRequest{Version: agentapi.Version, Workspace: workspace, Jobs: []agentapi.Job{{Type: agentapi.JobMkdir, Path: workspace, Mode: 0o755}}}
+
+	resp := postJobs(t, server, req)
+	if len(resp.Results) != 1 || !resp.Results[0].OK {
+		t.Fatalf("unexpected results: %+v", resp.Results)
+	}
+}
+
 func postJobs(t *testing.T, server *Server, req agentapi.BatchRequest) agentapi.BatchResponse {
 	t.Helper()
 	body, err := json.Marshal(req)

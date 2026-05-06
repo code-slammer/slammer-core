@@ -346,6 +346,9 @@ func safePath(workspace, requested string) (string, error) {
 }
 
 func ensureSafeParents(workspace, target string) error {
+	if filepath.Clean(target) == filepath.Clean(workspace) {
+		return rejectSymlink(workspace)
+	}
 	rel, err := filepath.Rel(workspace, filepath.Dir(target))
 	if err != nil {
 		return err
