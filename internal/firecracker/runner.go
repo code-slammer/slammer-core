@@ -152,10 +152,10 @@ func StartVM(ctx context.Context, req StartVMRequest) (*RunResult, error) {
 	}
 
 	shutdownStart := time.Now()
+	_ = machine.StopVMM()
 	select {
 	case <-waitCh:
-	case <-time.After(2 * time.Second):
-		_ = machine.StopVMM()
+	case <-time.After(100 * time.Millisecond):
 	}
 	result.Timings.ShutdownWaitDuration = time.Since(shutdownStart)
 	result.Timings.TotalDuration = time.Since(totalStart)

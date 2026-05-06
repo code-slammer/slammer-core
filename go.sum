@@ -33,6 +33,8 @@ github.com/elliotwutingfeng/asciiset v0.0.0-20230602022725-51bbb787efab h1:h1Ugj
 github.com/elliotwutingfeng/asciiset v0.0.0-20230602022725-51bbb787efab/go.mod h1:GLo/8fDswSAniFG+BFIaiSPcK610jyzgEhWYPQwuQdw=
 github.com/firecracker-microvm/firecracker-go-sdk v1.0.1-0.20250226173405-3a6ac021e56d h1:Y7qHlo683zTQEQofuW4kZVnjReVswEfbycegY7Rp2jw=
 github.com/firecracker-microvm/firecracker-go-sdk v1.0.1-0.20250226173405-3a6ac021e56d/go.mod h1:rBW9RJIEpClacnRSZyg0DKpEHuALw1aXZTjjARCewos=
+github.com/firecracker-microvm/firecracker-go-sdk v1.0.1-0.20251224190957-6fb280e993d4 h1:1ayVzAu5+MNZTpVxaY0++HgOXN86dT2Lr/Prqx+CCkU=
+github.com/firecracker-microvm/firecracker-go-sdk v1.0.1-0.20251224190957-6fb280e993d4/go.mod h1:IKSxd5Gsx+H4cFowjf6q4kuzbcCWkYsYGKxf/WKKNL4=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
 github.com/go-logr/logr v1.4.2 h1:6pFjapn8bFcIbiKo3XT4j/BhANplGihG6tvd+8rYgrY=
 github.com/go-logr/logr v1.4.2/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=

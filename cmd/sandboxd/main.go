@@ -175,7 +175,7 @@ func runVM(args []string) {
 		fatal(err)
 	}
 	printJobResults(result.Results)
-	printRunTimings(preflightDuration, prepareDuration, configDuration, result.Timings, time.Since(totalStart))
+	printRunTimings(prepared.CacheHit, preflightDuration, prepareDuration, configDuration, result.Timings, time.Since(totalStart))
 	if code := exitCodeFromResults(result.Results); code != 0 {
 		os.Exit(code)
 	}
@@ -403,8 +403,9 @@ func printJobResults(results []agentapi.JobResult) {
 	}
 }
 
-func printRunTimings(preflight time.Duration, prepare time.Duration, readConfig time.Duration, vm sandboxfirecracker.RunTimings, total time.Duration) {
+func printRunTimings(cacheHit bool, preflight time.Duration, prepare time.Duration, readConfig time.Duration, vm sandboxfirecracker.RunTimings, total time.Duration) {
 	fmt.Fprintln(os.Stderr, "timings:")
+	fmt.Fprintf(os.Stderr, "  prepare_cache_hit: %t\n", cacheHit)
 	fmt.Fprintf(os.Stderr, "  preflight: %s\n", preflight)
 	fmt.Fprintf(os.Stderr, "  prepare_image: %s\n", prepare)
 	fmt.Fprintf(os.Stderr, "  read_oci_config: %s\n", readConfig)

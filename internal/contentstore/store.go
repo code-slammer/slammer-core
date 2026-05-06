@@ -152,6 +152,15 @@ func (s *Store) WriteJSON(path string, value any) error {
 	return os.Rename(tmpPath, path)
 }
 
+func (s *Store) ReadJSON(path string, value any) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return json.NewDecoder(file).Decode(value)
+}
+
 func EscapeRef(ref string) string {
 	replacer := strings.NewReplacer("/", "_", ":", "_", "@", "_", " ", "_")
 	return replacer.Replace(ref)

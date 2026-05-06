@@ -4,7 +4,7 @@ go 1.25.7
 
 require (
 	github.com/diskfs/go-diskfs v1.9.1
-	github.com/firecracker-microvm/firecracker-go-sdk v1.0.1-0.20250226173405-3a6ac021e56d
+	github.com/firecracker-microvm/firecracker-go-sdk v1.0.1-0.20251224190957-6fb280e993d4
 	github.com/google/go-containerregistry v0.20.3
 	github.com/mdlayher/vsock v1.2.1
 	github.com/sirupsen/logrus v1.9.4
