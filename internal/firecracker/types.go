@@ -14,6 +14,7 @@ type StartVMRequest struct {
 	ID              string
 	StoreDir        string
 	FirecrackerPath string
+	Jailer          *JailerConfig
 	KernelPath      string
 	BootImagePath   string
 	TargetImagePath string
@@ -31,6 +32,7 @@ type SnapshotRequest struct {
 	ID              string
 	StoreDir        string
 	FirecrackerPath string
+	Jailer          *JailerConfig
 	KernelPath      string
 	BootImagePath   string
 	TargetImagePath string
@@ -44,6 +46,16 @@ type SnapshotArtifact struct {
 	MemPath      string
 	SnapshotPath string
 	WorkspaceDir string
+}
+
+type JailerConfig struct {
+	Binary        string
+	ChrootBaseDir string
+	UID           int
+	GID           int
+	NumaNode      int
+	CgroupVersion string
+	CgroupArgs    []string
 }
 
 type RunResult struct {

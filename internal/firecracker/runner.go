@@ -69,12 +69,48 @@ func StartVM(ctx context.Context, req StartVMRequest) (*RunResult, error) {
 	apiSocket := filepath.Join(socketDir, req.ID+".api.socket")
 	vsockPath := filepath.Join(socketDir, req.ID+".vsock")
 	logPath := filepath.Join(logDir, req.ID+".log")
+	jailerStdoutPath := filepath.Join(logDir, req.ID+".jailer.stdout.log")
+	jailerStderrPath := filepath.Join(logDir, req.ID+".jailer.stderr.log")
+	guestAPISocket := apiSocket
+	clientAPISocket := apiSocket
+	guestLogPath := logPath
+	guestVsockPath := vsockPath
+	clientVsockPath := vsockPath
 	_ = os.Remove(apiSocket)
 	_ = os.Remove(vsockPath)
+	var jailerStdout io.Writer = io.Discard
+	var jailerStderr io.Writer = io.Discard
+	if req.Jailer != nil {
+		guestAPISocket = "api.socket"
+		clientAPISocket = filepath.Join(jailerRootfsDir(req.Jailer, req.FirecrackerPath, req.ID), guestAPISocket)
+		guestLogPath = ""
+		guestVsockPath = "vsock"
+		clientVsockPath = filepath.Join(jailerRootfsDir(req.Jailer, req.FirecrackerPath, req.ID), guestVsockPath)
+		if err := validateUnixSocketPath(clientAPISocket); err != nil {
+			return nil, err
+		}
+		if err := validateUnixSocketPath(clientVsockPath); err != nil {
+			return nil, err
+		}
+		_ = os.Remove(clientAPISocket)
+		_ = os.Remove(clientVsockPath)
+		stdoutFile, err := os.Create(jailerStdoutPath)
+		if err != nil {
+			return nil, err
+		}
+		defer stdoutFile.Close()
+		stderrFile, err := os.Create(jailerStderrPath)
+		if err != nil {
+			return nil, err
+		}
+		defer stderrFile.Close()
+		jailerStdout = stdoutFile
+		jailerStderr = stderrFile
+	}
 
 	fcCfg := sdk.Config{
-		SocketPath:      apiSocket,
-		LogPath:         logPath,
+		SocketPath:      guestAPISocket,
+		LogPath:         guestLogPath,
 		LogLevel:        "Info",
 		KernelImagePath: req.KernelPath,
 		KernelArgs:      DefaultKernelArgs,
@@ -82,21 +118,28 @@ func StartVM(ctx context.Context, req StartVMRequest) (*RunResult, error) {
 		MachineCfg:      MachineConfiguration(req.MachineConfig),
 		Seccomp:         sdk.SeccompConfig{Enabled: true},
 		VsockDevices: []sdk.VsockDevice{{
-			Path: vsockPath,
+			Path: guestVsockPath,
 			CID:  req.VsockCID,
 		}},
+	}
+	if req.Jailer != nil {
+		fcCfg.JailerCfg = sdkJailerConfig(req.Jailer, req.FirecrackerPath, req.KernelPath, req.ID, jailerStdout, jailerStderr)
 	}
 
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
 	entry := logrus.NewEntry(logger)
-	cmd := sdk.VMCommandBuilder{}.
-		WithBin(req.FirecrackerPath).
-		WithSocketPath(apiSocket).
-		WithStdout(io.Discard).
-		WithStderr(io.Discard).
-		Build(ctx)
-	machine, err := sdk.NewMachine(ctx, fcCfg, sdk.WithLogger(entry), sdk.WithProcessRunner(cmd))
+	options := []sdk.Opt{sdk.WithLogger(entry)}
+	if req.Jailer == nil {
+		cmd := sdk.VMCommandBuilder{}.
+			WithBin(req.FirecrackerPath).
+			WithSocketPath(apiSocket).
+			WithStdout(io.Discard).
+			WithStderr(io.Discard).
+			Build(ctx)
+		options = append(options, sdk.WithProcessRunner(cmd))
+	}
+	machine, err := sdk.NewMachine(ctx, fcCfg, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +150,7 @@ func StartVM(ctx context.Context, req StartVMRequest) (*RunResult, error) {
 	}
 	timings.MachineStartDuration = time.Since(machineStart)
 
-	vm := VMHandle{ID: req.ID, SocketPath: apiSocket}
+	vm := VMHandle{ID: req.ID, SocketPath: clientAPISocket}
 	resultCh := make(chan *RunResult, 1)
 	errCh := make(chan error, 1)
 	runCtx, cancel := context.WithTimeout(ctx, req.Timeout)
@@ -115,7 +158,7 @@ func StartVM(ctx context.Context, req StartVMRequest) (*RunResult, error) {
 
 	go func() {
 		localTimings := timings
-		client := agentclient.NewFirecrackerVsock(vsockPath, agentclient.DefaultVsockPort)
+		client := agentclient.NewFirecrackerVsock(clientVsockPath, agentclient.DefaultVsockPort)
 		jobsStart := time.Now()
 		request := agentapi.BatchRequest{
 			Version:   agentapi.Version,
@@ -175,6 +218,21 @@ func startFromSnapshot(ctx context.Context, req StartVMRequest, totalStart time.
 
 	apiSocket := filepath.Join(tmpDir, "firecracker.sock")
 	vsockPath := filepath.Join(req.Snapshot.WorkspaceDir, "vsock.sock")
+	memPath := req.Snapshot.MemPath
+	snapshotPath := req.Snapshot.SnapshotPath
+	if req.Jailer != nil {
+		rootfs := jailerRootfsDir(req.Jailer, req.FirecrackerPath, req.ID)
+		apiSocket = filepath.Join(rootfs, "api.socket")
+		vsockPath = filepath.Join(rootfs, "vsock")
+		memPath = "snapshot.mem"
+		snapshotPath = "snapshot.state"
+		if err := validateUnixSocketPath(apiSocket); err != nil {
+			return nil, err
+		}
+		if err := validateUnixSocketPath(vsockPath); err != nil {
+			return nil, err
+		}
+	}
 
 	// Clear stale vsock UDS so Firecracker can re-bind on restore.
 	_ = os.Remove(vsockPath)
@@ -185,6 +243,9 @@ func startFromSnapshot(ctx context.Context, req StartVMRequest, totalStart time.
 		WithStdout(io.Discard).
 		WithStderr(io.Discard).
 		Build(ctx)
+	if req.Jailer != nil {
+		cmd = jailerCommand(ctx, req.Jailer, req.FirecrackerPath, req.ID, "api.socket", io.Discard, io.Discard)
+	}
 
 	machineStart := time.Now()
 	if err := cmd.Start(); err != nil {
@@ -195,14 +256,37 @@ func startFromSnapshot(ctx context.Context, req StartVMRequest, totalStart time.
 	if err := waitForSocket(ctx, apiSocket); err != nil {
 		return nil, fmt.Errorf("firecracker socket not ready for restore: %w", err)
 	}
+	if req.Jailer != nil {
+		rootfs := jailerRootfsDir(req.Jailer, req.FirecrackerPath, req.ID)
+		if err := linkFile(req.BootImagePath, filepath.Join(rootfs, filepath.Base(req.BootImagePath))); err != nil {
+			return nil, err
+		}
+		if err := linkFile(req.TargetImagePath, filepath.Join(rootfs, filepath.Base(req.TargetImagePath))); err != nil {
+			return nil, err
+		}
+		jailedMemPath := filepath.Join(rootfs, memPath)
+		jailedSnapshotPath := filepath.Join(rootfs, snapshotPath)
+		if err := linkFile(req.Snapshot.MemPath, jailedMemPath); err != nil {
+			return nil, err
+		}
+		if err := os.Chown(jailedMemPath, req.Jailer.UID, req.Jailer.GID); err != nil {
+			return nil, err
+		}
+		if err := linkFile(req.Snapshot.SnapshotPath, jailedSnapshotPath); err != nil {
+			return nil, err
+		}
+		if err := os.Chown(jailedSnapshotPath, req.Jailer.UID, req.Jailer.GID); err != nil {
+			return nil, err
+		}
+	}
 	timings := RunTimings{
 		SetupDuration:        time.Since(setupStart),
 		MachineStartDuration: time.Since(machineStart),
 	}
 
 	client := sdk.NewClient(apiSocket, nil, false)
-	sp := req.Snapshot.SnapshotPath
-	mp := req.Snapshot.MemPath
+	sp := snapshotPath
+	mp := memPath
 	if _, err := client.LoadSnapshot(ctx, &models.SnapshotLoadParams{
 		SnapshotPath: &sp,
 		MemFilePath:  mp,

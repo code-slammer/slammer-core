@@ -25,6 +25,17 @@ import (
 	"github.com/diskfs/go-diskfs/filesystem/ext4"
 )
 
+type repeatedStrings []string
+
+func (v *repeatedStrings) String() string {
+	return strings.Join(*v, ",")
+}
+
+func (v *repeatedStrings) Set(value string) error {
+	*v = append(*v, value)
+	return nil
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -96,6 +107,13 @@ func runVM(args []string) {
 	kernelPath := fs.String("kernel", config.DefaultKernelPath, "Firecracker kernel image path")
 	bootImagePath := fs.String("boot-image", config.DefaultBootImagePath, "trusted boot/init ext4 image path")
 	firecrackerPath := fs.String("firecracker-bin", "firecracker", "Firecracker binary path")
+	jailerPath := fs.String("jailer-bin", "", "jailer binary path; enables Firecracker jailer when set")
+	jailerChrootBase := fs.String("jailer-chroot-base-dir", "", "jailer chroot base directory")
+	jailerUID := fs.Int("jailer-uid", 0, "host uid for jailed Firecracker process")
+	jailerGID := fs.Int("jailer-gid", 0, "host gid for jailed Firecracker process")
+	jailerCgroupVersion := fs.String("jailer-cgroup-version", "2", "jailer cgroup version")
+	var jailerCgroups repeatedStrings
+	fs.Var(&jailerCgroups, "jailer-cgroup", "jailer cgroup setting key=value; may be repeated")
 	osName := fs.String("os", config.DefaultPlatformOS, "target platform OS")
 	arch := fs.String("arch", config.DefaultArchitecture, "target platform architecture")
 	vcpu := fs.Int("vcpu", 1, "vCPU count")
@@ -118,6 +136,10 @@ func runVM(args []string) {
 	}
 	preflightStart := time.Now()
 	resolvedFirecracker, err := preflightVMRun(*firecrackerPath, *kernelPath, *bootImagePath)
+	if err != nil {
+		fatal(err)
+	}
+	jailerCfg, err := jailerConfig(*jailerPath, *jailerChrootBase, *jailerUID, *jailerGID, *jailerCgroupVersion, jailerCgroups)
 	if err != nil {
 		fatal(err)
 	}
@@ -165,6 +187,7 @@ func runVM(args []string) {
 			if _, err := sandboxfirecracker.CreateReadySnapshot(ctx, sandboxfirecracker.SnapshotRequest{
 				StoreDir:        *storeDir,
 				FirecrackerPath: resolvedFirecracker,
+				Jailer:          jailerCfg,
 				KernelPath:      *kernelPath,
 				BootImagePath:   *bootImagePath,
 				TargetImagePath: prepared.RootfsPath,
@@ -181,6 +204,7 @@ func runVM(args []string) {
 	result, err := sandboxfirecracker.StartVM(ctx, sandboxfirecracker.StartVMRequest{
 		StoreDir:        *storeDir,
 		FirecrackerPath: resolvedFirecracker,
+		Jailer:          jailerCfg,
 		KernelPath:      *kernelPath,
 		BootImagePath:   *bootImagePath,
 		TargetImagePath: prepared.RootfsPath,
@@ -211,6 +235,13 @@ func createSnapshot(args []string) {
 	kernelPath := fs.String("kernel", config.DefaultKernelPath, "Firecracker kernel image path")
 	bootImagePath := fs.String("boot-image", config.DefaultBootImagePath, "trusted boot/init ext4 image path")
 	firecrackerPath := fs.String("firecracker-bin", "firecracker", "Firecracker binary path")
+	jailerPath := fs.String("jailer-bin", "", "jailer binary path; enables Firecracker jailer when set")
+	jailerChrootBase := fs.String("jailer-chroot-base-dir", "", "jailer chroot base directory")
+	jailerUID := fs.Int("jailer-uid", 0, "host uid for jailed Firecracker process")
+	jailerGID := fs.Int("jailer-gid", 0, "host gid for jailed Firecracker process")
+	jailerCgroupVersion := fs.String("jailer-cgroup-version", "2", "jailer cgroup version")
+	var jailerCgroups repeatedStrings
+	fs.Var(&jailerCgroups, "jailer-cgroup", "jailer cgroup setting key=value; may be repeated")
 	snapshotDir := fs.String("snapshot-dir", filepath.Join("tmp", "snapshots"), "snapshot artifact directory")
 	vcpu := fs.Int("vcpu", 1, "vCPU count")
 	mem := fs.Int("mem-mib", 256, "memory size in MiB")
@@ -226,6 +257,10 @@ func createSnapshot(args []string) {
 	if err != nil {
 		fatal(err)
 	}
+	jailerCfg, err := jailerConfig(*jailerPath, *jailerChrootBase, *jailerUID, *jailerGID, *jailerCgroupVersion, jailerCgroups)
+	if err != nil {
+		fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout+2*time.Minute)
 	defer cancel()
 	rt := sandboxruntime.New(config.Config{StoreDir: *storeDir, KernelPath: *kernelPath, BootImagePath: *bootImagePath})
@@ -237,6 +272,7 @@ func createSnapshot(args []string) {
 	created, err := sandboxfirecracker.CreateReadySnapshot(ctx, sandboxfirecracker.SnapshotRequest{
 		StoreDir:        *storeDir,
 		FirecrackerPath: resolvedFirecracker,
+		Jailer:          jailerCfg,
 		KernelPath:      *kernelPath,
 		BootImagePath:   *bootImagePath,
 		TargetImagePath: prepared.RootfsPath,
@@ -294,6 +330,38 @@ func preflightVMRun(firecrackerPath, kernelPath, bootImagePath string) (string, 
 		return "", fmt.Errorf("/dev/kvm is not available; Firecracker requires KVM access on the host: %w", err)
 	}
 	return resolvedFirecracker, nil
+}
+
+func jailerConfig(jailerPath string, chrootBase string, uid int, gid int, cgroupVersion string, cgroupArgs []string) (*sandboxfirecracker.JailerConfig, error) {
+	if jailerPath == "" {
+		return nil, nil
+	}
+	resolved := jailerPath
+	if !strings.ContainsRune(jailerPath, os.PathSeparator) {
+		path, err := exec.LookPath(jailerPath)
+		if err != nil {
+			return nil, fmt.Errorf("jailer binary %q not found in PATH", jailerPath)
+		}
+		resolved = path
+	}
+	if _, err := os.Stat(resolved); err != nil {
+		return nil, fmt.Errorf("jailer path %q is not readable: %w", resolved, err)
+	}
+	if chrootBase != "" {
+		abs, err := filepath.Abs(chrootBase)
+		if err != nil {
+			return nil, err
+		}
+		chrootBase = abs
+	}
+	return &sandboxfirecracker.JailerConfig{
+		Binary:        resolved,
+		ChrootBaseDir: chrootBase,
+		UID:           uid,
+		GID:           gid,
+		CgroupVersion: cgroupVersion,
+		CgroupArgs:    cgroupArgs,
+	}, nil
 }
 
 func prepareImage(args []string) {
