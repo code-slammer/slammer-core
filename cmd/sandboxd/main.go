@@ -19,7 +19,7 @@ import (
 	"github.com/code-slammer/slammer-core/internal/agentserver"
 	"github.com/code-slammer/slammer-core/internal/config"
 	sandboxfirecracker "github.com/code-slammer/slammer-core/internal/firecracker"
-	"github.com/code-slammer/slammer-core/internal/oci"
+	"github.com/code-slammer/slammer-core/internal/manager"
 	sandboxruntime "github.com/code-slammer/slammer-core/internal/runtime"
 	"github.com/diskfs/go-diskfs/backend/file"
 	"github.com/diskfs/go-diskfs/filesystem/ext4"
@@ -134,97 +134,46 @@ func runVM(args []string) {
 	if len(argv) > 0 && argv[0] == "--" {
 		argv = argv[1:]
 	}
-	preflightStart := time.Now()
-	resolvedFirecracker, err := preflightVMRun(*firecrackerPath, *kernelPath, *bootImagePath)
-	if err != nil {
-		fatal(err)
-	}
 	jailerCfg, err := jailerConfig(*jailerPath, *jailerChrootBase, *jailerUID, *jailerGID, *jailerCgroupVersion, jailerCgroups)
 	if err != nil {
 		fatal(err)
 	}
-	preflightDuration := time.Since(preflightStart)
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout+2*time.Minute)
 	defer cancel()
-	rt := sandboxruntime.New(config.Config{StoreDir: *storeDir, KernelPath: *kernelPath, BootImagePath: *bootImagePath})
-	prepareStart := time.Now()
-	prepared, err := rt.PrepareImage(ctx, imageRef, config.Platform{OS: *osName, Architecture: *arch})
-	if err != nil {
-		fatal(err)
-	}
-	prepareDuration := time.Since(prepareStart)
-	configStart := time.Now()
-	imageConfig, err := readOCIConfig(prepared.OCIConfigPath)
-	if err != nil {
-		fatal(err)
-	}
-	configDuration := time.Since(configStart)
 	jobUID, jobGID := *uid, *gid
-	defaults := agentapi.JobDefaults{
-		UID:            &jobUID,
-		GID:            &jobGID,
-		Env:            imageConfig.Config.Env,
-		TimeoutMillis:  int64(timeout.Milliseconds()),
-		MaxOutputBytes: 4 << 20,
-	}
-	if len(defaults.Env) == 0 {
-		defaults.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
-	}
-	if len(argv) == 0 {
-		argv = append([]string{}, imageConfig.Config.Entrypoint...)
-		argv = append(argv, imageConfig.Config.Cmd...)
-		if len(argv) == 0 {
-			fatal(fmt.Errorf("no command provided and image has no Entrypoint/Cmd"))
-		}
-	}
-	jobWorkdir := *workdir
-	var snapshot *sandboxfirecracker.SnapshotArtifact
-	if *snapshotDir != "" {
-		snapshot = snapshotArtifact(*snapshotDir, prepared.ChainID)
-		if !snapshotExists(snapshot) {
-			snapStart := time.Now()
-			if _, err := sandboxfirecracker.CreateReadySnapshot(ctx, sandboxfirecracker.SnapshotRequest{
-				StoreDir:        *storeDir,
-				FirecrackerPath: resolvedFirecracker,
-				Jailer:          jailerCfg,
-				KernelPath:      *kernelPath,
-				BootImagePath:   *bootImagePath,
-				TargetImagePath: prepared.RootfsPath,
-				MachineConfig:   sandboxfirecracker.MachineConfig{VCPUCount: *vcpu, MemSizeMiB: *mem},
-				Timeout:         *timeout,
-				Snapshot:        *snapshot,
-			}); err != nil {
-				fatal(err)
-			}
-			fmt.Fprintf(os.Stderr, "snapshot_create: %s\n", time.Since(snapStart))
-		}
-	}
-
-	result, err := sandboxfirecracker.StartVM(ctx, sandboxfirecracker.StartVMRequest{
-		StoreDir:        *storeDir,
-		FirecrackerPath: resolvedFirecracker,
-		Jailer:          jailerCfg,
+	mgr := manager.New(config.Config{StoreDir: *storeDir, KernelPath: *kernelPath, BootImagePath: *bootImagePath})
+	result, err := mgr.Run(ctx, manager.RunRequest{
+		ImageRef:        imageRef,
+		Platform:        config.Platform{OS: *osName, Architecture: *arch},
+		Command:         argv,
 		KernelPath:      *kernelPath,
 		BootImagePath:   *bootImagePath,
-		TargetImagePath: prepared.RootfsPath,
+		FirecrackerPath: *firecrackerPath,
+		Jailer:          jailerCfg,
 		MachineConfig:   sandboxfirecracker.MachineConfig{VCPUCount: *vcpu, MemSizeMiB: *mem},
-		Defaults:        defaults,
 		Workspace:       "/workspace",
-		Jobs: []agentapi.Job{
-			{Type: agentapi.JobMkdir, Path: "/workspace", Mode: 0o755},
-			{Type: agentapi.JobExec, Argv: argv, WorkingDir: jobWorkdir},
+		Workdir:         *workdir,
+		UID:             jobUID,
+		GID:             jobGID,
+		Defaults: agentapi.JobDefaults{
+			UID:            &jobUID,
+			GID:            &jobGID,
+			TimeoutMillis:  int64(timeout.Milliseconds()),
+			MaxOutputBytes: 4 << 20,
 		},
-		Shutdown: true,
-		Timeout:  *timeout,
-		Snapshot: snapshot,
+		Timeout:     *timeout,
+		SnapshotDir: *snapshotDir,
 	})
 	if err != nil {
 		fatal(err)
 	}
-	printJobResults(result.Results)
-	printRunTimings(prepared.CacheHit, preflightDuration, prepareDuration, configDuration, result.Timings, time.Since(totalStart))
-	if code := exitCodeFromResults(result.Results); code != 0 {
+	if result.Timings.SnapshotDuration > 0 {
+		fmt.Fprintf(os.Stderr, "snapshot_create: %s\n", result.Timings.SnapshotDuration)
+	}
+	printJobResults(result.VM.Results)
+	printRunTimings(result.Image.CacheHit, result.Timings.PreflightDuration, result.Timings.PrepareDuration, result.Timings.ReadConfigDuration, result.VM.Timings, time.Since(totalStart))
+	if code := exitCodeFromResults(result.VM.Results); code != 0 {
 		os.Exit(code)
 	}
 }
@@ -253,32 +202,23 @@ func createSnapshot(args []string) {
 		fatal(fmt.Errorf("usage: sandboxd create-snapshot [flags] IMAGE_REF"))
 	}
 	imageRef := fs.Arg(0)
-	resolvedFirecracker, err := preflightVMRun(*firecrackerPath, *kernelPath, *bootImagePath)
-	if err != nil {
-		fatal(err)
-	}
 	jailerCfg, err := jailerConfig(*jailerPath, *jailerChrootBase, *jailerUID, *jailerGID, *jailerCgroupVersion, jailerCgroups)
 	if err != nil {
 		fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout+2*time.Minute)
 	defer cancel()
-	rt := sandboxruntime.New(config.Config{StoreDir: *storeDir, KernelPath: *kernelPath, BootImagePath: *bootImagePath})
-	prepared, err := rt.PrepareImage(ctx, imageRef, config.Platform{OS: config.DefaultPlatformOS, Architecture: config.DefaultArchitecture})
-	if err != nil {
-		fatal(err)
-	}
-	snapshot := snapshotArtifact(*snapshotDir, prepared.ChainID)
-	created, err := sandboxfirecracker.CreateReadySnapshot(ctx, sandboxfirecracker.SnapshotRequest{
-		StoreDir:        *storeDir,
-		FirecrackerPath: resolvedFirecracker,
+	mgr := manager.New(config.Config{StoreDir: *storeDir, KernelPath: *kernelPath, BootImagePath: *bootImagePath})
+	created, err := mgr.CreateSnapshot(ctx, manager.CreateSnapshotRequest{
+		ImageRef:        imageRef,
+		Platform:        config.Platform{OS: config.DefaultPlatformOS, Architecture: config.DefaultArchitecture},
+		FirecrackerPath: *firecrackerPath,
 		Jailer:          jailerCfg,
 		KernelPath:      *kernelPath,
 		BootImagePath:   *bootImagePath,
-		TargetImagePath: prepared.RootfsPath,
 		MachineConfig:   sandboxfirecracker.MachineConfig{VCPUCount: *vcpu, MemSizeMiB: *mem},
 		Timeout:         *timeout,
-		Snapshot:        *snapshot,
+		SnapshotDir:     *snapshotDir,
 	})
 	if err != nil {
 		fatal(err)
@@ -288,48 +228,6 @@ func createSnapshot(args []string) {
 	if err := enc.Encode(created); err != nil {
 		fatal(err)
 	}
-}
-
-func snapshotArtifact(snapshotDir string, chainID string) *sandboxfirecracker.SnapshotArtifact {
-	encoded := strings.TrimPrefix(chainID, "sha256:")
-	return &sandboxfirecracker.SnapshotArtifact{
-		MemPath:      filepath.Join(snapshotDir, encoded+".mem"),
-		SnapshotPath: filepath.Join(snapshotDir, encoded+".snapshot"),
-		WorkspaceDir: filepath.Join(snapshotDir, encoded+"-workspace"),
-	}
-}
-
-func snapshotExists(snapshot *sandboxfirecracker.SnapshotArtifact) bool {
-	if snapshot == nil {
-		return false
-	}
-	if _, err := os.Stat(snapshot.MemPath); err != nil {
-		return false
-	}
-	if _, err := os.Stat(snapshot.SnapshotPath); err != nil {
-		return false
-	}
-	return true
-}
-
-func preflightVMRun(firecrackerPath, kernelPath, bootImagePath string) (string, error) {
-	resolvedFirecracker := firecrackerPath
-	if !strings.ContainsRune(firecrackerPath, os.PathSeparator) {
-		path, err := exec.LookPath(firecrackerPath)
-		if err != nil {
-			return "", fmt.Errorf("firecracker binary %q not found in PATH; pass --firecracker-bin /path/to/firecracker", firecrackerPath)
-		}
-		resolvedFirecracker = path
-	}
-	for label, p := range map[string]string{"firecracker": resolvedFirecracker, "kernel": kernelPath, "boot image": bootImagePath} {
-		if _, err := os.Stat(p); err != nil {
-			return "", fmt.Errorf("%s path %q is not readable: %w", label, p, err)
-		}
-	}
-	if _, err := os.Stat("/dev/kvm"); err != nil {
-		return "", fmt.Errorf("/dev/kvm is not available; Firecracker requires KVM access on the host: %w", err)
-	}
-	return resolvedFirecracker, nil
 }
 
 func jailerConfig(jailerPath string, chrootBase string, uid int, gid int, cgroupVersion string, cgroupArgs []string) (*sandboxfirecracker.JailerConfig, error) {
@@ -377,10 +275,10 @@ func prepareImage(args []string) {
 		fatal(fmt.Errorf("usage: sandboxd prepare-image [flags] IMAGE_REF"))
 	}
 
-	rt := sandboxruntime.New(config.Config{StoreDir: *storeDir})
+	mgr := manager.New(config.Config{StoreDir: *storeDir})
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	prepared, err := rt.PrepareImage(ctx, fs.Arg(0), config.Platform{OS: *osName, Architecture: *arch})
+	prepared, err := mgr.PrepareImage(ctx, manager.PrepareImageRequest{ImageRef: fs.Arg(0), Platform: config.Platform{OS: *osName, Architecture: *arch}})
 	if err != nil {
 		fatal(err)
 	}
@@ -533,18 +431,6 @@ func cleanImagePath(p string) string {
 		return "."
 	}
 	return clean
-}
-
-func readOCIConfig(path string) (*oci.ImageConfig, error) {
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var cfg oci.ImageConfig
-	if err := json.Unmarshal(contents, &cfg); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
 }
 
 func printJobResults(results []agentapi.JobResult) {

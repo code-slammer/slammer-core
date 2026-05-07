@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/code-slammer/slammer-core/internal/agentclient"
@@ -179,6 +180,30 @@ func CreateReadySnapshot(ctx context.Context, req SnapshotRequest) (*SnapshotArt
 func linkFile(src string, dst string) error {
 	_ = os.Remove(dst)
 	return os.Link(src, dst)
+}
+
+func linkFileIntoJail(src string, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return linkFile(src, dst)
+}
+
+func linkJailedDrive(src string, rootfs string) error {
+	if err := linkFileIntoJail(src, jailedBackingFilePath(rootfs, src)); err != nil {
+		return err
+	}
+	basenamePath := filepath.Join(rootfs, filepath.Base(src))
+	if basenamePath == jailedBackingFilePath(rootfs, src) {
+		return nil
+	}
+	return linkFileIntoJail(src, basenamePath)
+}
+
+func jailedBackingFilePath(rootfs string, path string) string {
+	clean := filepath.Clean(path)
+	clean = strings.TrimPrefix(clean, string(os.PathSeparator))
+	return filepath.Join(rootfs, clean)
 }
 
 func waitForAgent(ctx context.Context, client *agentclient.Client, delay time.Duration) error {

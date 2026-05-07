@@ -258,10 +258,10 @@ func startFromSnapshot(ctx context.Context, req StartVMRequest, totalStart time.
 	}
 	if req.Jailer != nil {
 		rootfs := jailerRootfsDir(req.Jailer, req.FirecrackerPath, req.ID)
-		if err := linkFile(req.BootImagePath, filepath.Join(rootfs, filepath.Base(req.BootImagePath))); err != nil {
+		if err := linkJailedDrive(req.BootImagePath, rootfs); err != nil {
 			return nil, err
 		}
-		if err := linkFile(req.TargetImagePath, filepath.Join(rootfs, filepath.Base(req.TargetImagePath))); err != nil {
+		if err := linkJailedDrive(req.TargetImagePath, rootfs); err != nil {
 			return nil, err
 		}
 		jailedMemPath := filepath.Join(rootfs, memPath)
