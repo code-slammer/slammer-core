@@ -36,7 +36,8 @@ func (a LayerApplier) ApplyLayer(ctx context.Context, compressedLayerPath string
 	defer reader.Close()
 
 	hash := sha256.New()
-	tarReader := tar.NewReader(io.TeeReader(reader, hash))
+	hashedReader := io.TeeReader(reader, hash)
+	tarReader := tar.NewReader(hashedReader)
 	for {
 		select {
 		case <-ctx.Done():
@@ -54,6 +55,9 @@ func (a LayerApplier) ApplyLayer(ctx context.Context, compressedLayerPath string
 		if err := a.applyEntry(header, tarReader); err != nil {
 			return fmt.Errorf("apply %q: %w", header.Name, err)
 		}
+	}
+	if _, err := io.Copy(io.Discard, hashedReader); err != nil {
+		return err
 	}
 
 	actual := "sha256:" + hex.EncodeToString(hash.Sum(nil))

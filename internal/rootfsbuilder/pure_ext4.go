@@ -71,7 +71,8 @@ func (a DiskfsLayerApplier) ApplyLayer(ctx context.Context, compressedLayerPath 
 	defer reader.Close()
 
 	hash := sha256.New()
-	tarReader := tar.NewReader(io.TeeReader(reader, hash))
+	hashedReader := io.TeeReader(reader, hash)
+	tarReader := tar.NewReader(hashedReader)
 	for {
 		select {
 		case <-ctx.Done():
@@ -89,6 +90,9 @@ func (a DiskfsLayerApplier) ApplyLayer(ctx context.Context, compressedLayerPath 
 		if err := a.applyEntry(header, tarReader); err != nil {
 			return fmt.Errorf("apply %q: %w", header.Name, err)
 		}
+	}
+	if _, err := io.Copy(io.Discard, hashedReader); err != nil {
+		return err
 	}
 
 	actual := "sha256:" + hex.EncodeToString(hash.Sum(nil))
@@ -160,7 +164,12 @@ func (a DiskfsLayerApplier) writeFile(target string, header *tar.Header, reader 
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.Copy(file, reader)
+	contents, readErr := io.ReadAll(io.LimitReader(reader, header.Size))
+	if readErr != nil {
+		_ = file.Close()
+		return readErr
+	}
+	_, copyErr := file.Write(contents)
 	closeErr := file.Close()
 	if copyErr != nil {
 		return copyErr
@@ -177,6 +186,13 @@ func (a DiskfsLayerApplier) symlink(target string, header *tar.Header) error {
 	}
 	if err := a.mkdirAll(path.Dir(target)); err != nil {
 		return err
+	}
+	if existing, err := a.FS.ReadLink(target); err == nil {
+		a.Symlinks[target] = true
+		if existing == header.Linkname {
+			return a.applyMetadata(target, header, true)
+		}
+		return fmt.Errorf("refusing to replace symlink %q -> %q with %q", target, existing, header.Linkname)
 	}
 	if err := a.removeIfExists(target); err != nil {
 		return err
@@ -212,7 +228,23 @@ func (a DiskfsLayerApplier) hardlink(target string, header *tar.Header) error {
 	if err := a.removeIfExists(target); err != nil {
 		return err
 	}
-	return a.FS.Link(linkTarget, target)
+	contents, err := a.FS.ReadFile(linkTarget)
+	if err != nil {
+		return err
+	}
+	file, err := a.FS.OpenFile(target, os.O_CREATE|os.O_RDWR)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write(contents)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return a.applyMetadata(target, header, false)
 }
 
 func (a DiskfsLayerApplier) mkdirAll(target string) error {

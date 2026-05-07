@@ -69,8 +69,11 @@ func TestLayerApplierVerifiesDiffID(t *testing.T) {
 }
 
 type testEntry struct {
-	path string
-	body string
+	path     string
+	body     string
+	typeflag byte
+	linkname string
+	mode     int64
 }
 
 func writeTestLayer(t *testing.T, entries []testEntry) (string, string) {
@@ -78,16 +81,30 @@ func writeTestLayer(t *testing.T, entries []testEntry) (string, string) {
 	var raw bytes.Buffer
 	tw := tar.NewWriter(&raw)
 	for _, entry := range entries {
+		typeflag := entry.typeflag
+		if typeflag == 0 {
+			typeflag = tar.TypeReg
+		}
 		header := &tar.Header{
-			Name: entry.path,
-			Mode: 0o644,
-			Size: int64(len(entry.body)),
+			Name:     entry.path,
+			Mode:     0o644,
+			Size:     int64(len(entry.body)),
+			Typeflag: typeflag,
+			Linkname: entry.linkname,
+		}
+		if typeflag == tar.TypeLink {
+			header.Size = 0
+		}
+		if entry.mode != 0 {
+			header.Mode = entry.mode
 		}
 		if err := tw.WriteHeader(header); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tw.Write([]byte(entry.body)); err != nil {
-			t.Fatal(err)
+		if header.Size > 0 {
+			if _, err := tw.Write([]byte(entry.body)); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	if err := tw.Close(); err != nil {
