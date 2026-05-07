@@ -259,6 +259,7 @@ func snapshotArtifact(snapshotDir string, chainID string) *sandboxfirecracker.Sn
 	return &sandboxfirecracker.SnapshotArtifact{
 		MemPath:      filepath.Join(snapshotDir, encoded+".mem"),
 		SnapshotPath: filepath.Join(snapshotDir, encoded+".snapshot"),
+		WorkspaceDir: filepath.Join(snapshotDir, encoded+"-workspace"),
 	}
 }
 

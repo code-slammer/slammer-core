@@ -42,6 +42,16 @@ func CreateReadySnapshot(ctx context.Context, req SnapshotRequest) (*SnapshotArt
 	_ = os.Remove(req.Snapshot.MemPath)
 	_ = os.Remove(req.Snapshot.SnapshotPath)
 
+	workspaceDir := req.Snapshot.WorkspaceDir
+	if workspaceDir == "" {
+		workspaceDir = filepath.Join(filepath.Dir(req.Snapshot.MemPath), "workspace")
+	}
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		return nil, err
+	}
+	vsockPath := filepath.Join(workspaceDir, "vsock.sock")
+	_ = os.Remove(vsockPath)
+
 	socketDir := filepath.Join(req.StoreDir, "firecracker", "sockets")
 	logDir := filepath.Join(req.StoreDir, "firecracker", "logs")
 	if err := os.MkdirAll(socketDir, 0o755); err != nil {
@@ -51,10 +61,8 @@ func CreateReadySnapshot(ctx context.Context, req SnapshotRequest) (*SnapshotArt
 		return nil, err
 	}
 	apiSocket := filepath.Join(socketDir, req.ID+".snapshot.api.socket")
-	vsockPath := filepath.Join(socketDir, req.ID+".snapshot.vsock")
 	logPath := filepath.Join(logDir, req.ID+".snapshot.log")
 	_ = os.Remove(apiSocket)
-	_ = os.Remove(vsockPath)
 
 	fcCfg := sdk.Config{
 		SocketPath:      apiSocket,
@@ -99,6 +107,7 @@ func CreateReadySnapshot(ctx context.Context, req SnapshotRequest) (*SnapshotArt
 	if err := machine.CreateSnapshot(ctx, req.Snapshot.MemPath, req.Snapshot.SnapshotPath); err != nil {
 		return nil, err
 	}
+	_ = os.Remove(vsockPath)
 	return &req.Snapshot, nil
 }
 

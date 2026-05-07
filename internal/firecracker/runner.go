@@ -6,11 +6,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/code-slammer/slammer-core/internal/agentapi"
 	"github.com/code-slammer/slammer-core/internal/agentclient"
 	sdk "github.com/firecracker-microvm/firecracker-go-sdk"
+	"github.com/firecracker-microvm/firecracker-go-sdk/client/models"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 )
@@ -21,15 +23,6 @@ func StartVM(ctx context.Context, req StartVMRequest) (*RunResult, error) {
 	totalStart := time.Now()
 	if req.FirecrackerPath == "" {
 		return nil, fmt.Errorf("firecracker binary path is required")
-	}
-	if req.KernelPath == "" {
-		return nil, fmt.Errorf("kernel path is required")
-	}
-	if req.BootImagePath == "" {
-		return nil, fmt.Errorf("boot image path is required")
-	}
-	if req.TargetImagePath == "" {
-		return nil, fmt.Errorf("target image path is required")
 	}
 	if len(req.Jobs) == 0 {
 		return nil, fmt.Errorf("at least one job is required")
@@ -48,6 +41,20 @@ func StartVM(ctx context.Context, req StartVMRequest) (*RunResult, error) {
 	}
 	if req.Workspace == "" {
 		req.Workspace = "/workspace"
+	}
+
+	if req.Snapshot != nil {
+		return startFromSnapshot(ctx, req, totalStart)
+	}
+
+	if req.KernelPath == "" {
+		return nil, fmt.Errorf("kernel path is required")
+	}
+	if req.BootImagePath == "" {
+		return nil, fmt.Errorf("boot image path is required")
+	}
+	if req.TargetImagePath == "" {
+		return nil, fmt.Errorf("target image path is required")
 	}
 
 	setupStart := time.Now()
@@ -89,13 +96,7 @@ func StartVM(ctx context.Context, req StartVMRequest) (*RunResult, error) {
 		WithStdout(io.Discard).
 		WithStderr(io.Discard).
 		Build(ctx)
-	opts := []sdk.Opt{sdk.WithLogger(entry), sdk.WithProcessRunner(cmd)}
-	if req.Snapshot != nil {
-		opts = append(opts, sdk.WithSnapshot(req.Snapshot.MemPath, req.Snapshot.SnapshotPath, func(cfg *sdk.SnapshotConfig) {
-			cfg.ResumeVM = true
-		}))
-	}
-	machine, err := sdk.NewMachine(ctx, fcCfg, opts...)
+	machine, err := sdk.NewMachine(ctx, fcCfg, sdk.WithLogger(entry), sdk.WithProcessRunner(cmd))
 	if err != nil {
 		return nil, err
 	}
@@ -161,6 +162,109 @@ func StartVM(ctx context.Context, req StartVMRequest) (*RunResult, error) {
 	result.Timings.ShutdownWaitDuration = time.Since(shutdownStart)
 	result.Timings.TotalDuration = time.Since(totalStart)
 	return result, nil
+}
+
+func startFromSnapshot(ctx context.Context, req StartVMRequest, totalStart time.Time) (*RunResult, error) {
+	setupStart := time.Now()
+
+	tmpDir, err := os.MkdirTemp("", "snapshot-restore-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	apiSocket := filepath.Join(tmpDir, "firecracker.sock")
+	vsockPath := filepath.Join(req.Snapshot.WorkspaceDir, "vsock.sock")
+
+	// Clear stale vsock UDS so Firecracker can re-bind on restore.
+	_ = os.Remove(vsockPath)
+
+	cmd := sdk.VMCommandBuilder{}.
+		WithBin(req.FirecrackerPath).
+		WithSocketPath(apiSocket).
+		WithStdout(io.Discard).
+		WithStderr(io.Discard).
+		Build(ctx)
+
+	machineStart := time.Now()
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start firecracker for snapshot restore: %w", err)
+	}
+	defer func() { _ = cmd.Process.Kill() }()
+
+	if err := waitForSocket(ctx, apiSocket); err != nil {
+		return nil, fmt.Errorf("firecracker socket not ready for restore: %w", err)
+	}
+	timings := RunTimings{
+		SetupDuration:        time.Since(setupStart),
+		MachineStartDuration: time.Since(machineStart),
+	}
+
+	client := sdk.NewClient(apiSocket, nil, false)
+	sp := req.Snapshot.SnapshotPath
+	mp := req.Snapshot.MemPath
+	if _, err := client.LoadSnapshot(ctx, &models.SnapshotLoadParams{
+		SnapshotPath: &sp,
+		MemFilePath:  mp,
+		ResumeVM:     true,
+	}); err != nil {
+		return nil, fmt.Errorf("failed to load snapshot: %w", err)
+	}
+
+	vm := VMHandle{ID: req.ID, SocketPath: apiSocket}
+	runCtx, cancel := context.WithTimeout(ctx, req.Timeout)
+	defer cancel()
+
+	jobsStart := time.Now()
+	agent := agentclient.NewFirecrackerVsock(vsockPath, agentclient.DefaultVsockPort)
+	batchReq := agentapi.BatchRequest{
+		Version:   agentapi.Version,
+		Workspace: req.Workspace,
+		Defaults:  req.Defaults,
+		Jobs:      req.Jobs,
+		Shutdown:  true,
+	}
+	resp, err := retryJobs(runCtx, agent, batchReq, 10*time.Millisecond)
+	if err != nil {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		return nil, fmt.Errorf("agent send_batch failed: %w", err)
+	}
+	timings.JobsDuration = time.Since(jobsStart)
+
+	shutdownStart := time.Now()
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+
+	exitCtx, exitCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer exitCancel()
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- cmd.Wait() }()
+	select {
+	case <-waitErr:
+	case <-exitCtx.Done():
+	}
+
+	timings.ShutdownWaitDuration = time.Since(shutdownStart)
+	timings.TotalDuration = time.Since(totalStart)
+
+	return &RunResult{VM: vm, Results: resp.Results, Timings: timings}, nil
+}
+
+func waitForSocket(ctx context.Context, socketPath string) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(socketPath); err == nil {
+			client := sdk.NewClient(socketPath, nil, false)
+			if _, err := client.GetMachineConfiguration(); err == nil {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func retryJobs(ctx context.Context, client *agentclient.Client, request agentapi.BatchRequest, delay time.Duration) (*agentapi.BatchResponse, error) {

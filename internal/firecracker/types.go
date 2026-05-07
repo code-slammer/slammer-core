@@ -43,6 +43,7 @@ type SnapshotRequest struct {
 type SnapshotArtifact struct {
 	MemPath      string
 	SnapshotPath string
+	WorkspaceDir string
 }
 
 type RunResult struct {
