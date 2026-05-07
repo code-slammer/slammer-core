@@ -31,6 +31,7 @@ type RunRequest struct {
 	Timeout         time.Duration                 `json:"timeout"`
 	SnapshotDir     string                        `json:"snapshot_dir,omitempty"`
 	Snapshot        *firecracker.SnapshotArtifact `json:"snapshot,omitempty"`
+	CleanupJailer   bool                          `json:"cleanup_jailer"`
 }
 
 type CreateSnapshotRequest struct {
@@ -59,6 +60,14 @@ type PreparedImage struct {
 	RootfsPath     string `json:"rootfs_path"`
 	OCIConfigPath  string `json:"oci_config_path"`
 	CacheHit       bool   `json:"cache_hit"`
+}
+
+type SnapshotInfo struct {
+	ChainID      string `json:"chain_id"`
+	MemPath      string `json:"mem_path"`
+	SnapshotPath string `json:"snapshot_path"`
+	WorkspaceDir string `json:"workspace_dir"`
+	Exists       bool   `json:"exists"`
 }
 
 type RunTimings struct {

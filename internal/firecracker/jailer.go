@@ -50,11 +50,15 @@ func jailerCommand(ctx context.Context, cfg *JailerConfig, firecrackerPath strin
 }
 
 func jailerRootfsDir(cfg *JailerConfig, firecrackerPath string, id string) string {
+	return filepath.Join(JailerVMDir(cfg, firecrackerPath, id), "root")
+}
+
+func JailerVMDir(cfg *JailerConfig, firecrackerPath string, id string) string {
 	base := cfg.ChrootBaseDir
 	if base == "" {
 		base = "/srv/jailer"
 	}
-	return filepath.Join(base, filepath.Base(firecrackerPath), id, "root")
+	return filepath.Join(base, filepath.Base(firecrackerPath), id)
 }
 
 func validateUnixSocketPath(path string) error {

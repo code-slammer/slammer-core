@@ -12,8 +12,10 @@ import (
 
 	"github.com/code-slammer/slammer-core/internal/agentapi"
 	"github.com/code-slammer/slammer-core/internal/config"
+	"github.com/code-slammer/slammer-core/internal/contentstore"
 	"github.com/code-slammer/slammer-core/internal/firecracker"
 	"github.com/code-slammer/slammer-core/internal/oci"
+	"github.com/code-slammer/slammer-core/internal/rootfsbuilder"
 	sandboxruntime "github.com/code-slammer/slammer-core/internal/runtime"
 )
 
@@ -147,6 +149,9 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	if req.CleanupJailer && req.Jailer != nil {
+		_ = os.RemoveAll(firecracker.JailerVMDir(req.Jailer, resolvedFirecracker, vm.VM.ID))
+	}
 	return &RunResult{
 		Image: *prepared,
 		VM:    vm,
@@ -158,6 +163,116 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 			TotalDuration:      time.Since(totalStart),
 		},
 	}, nil
+}
+
+func (m *Manager) ListImages(ctx context.Context) ([]PreparedImage, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	store := contentstore.New(m.Config.StoreDir)
+	entries, err := os.ReadDir(filepath.Join(m.Config.StoreDir, "rootfs", "complete"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	images := make([]PreparedImage, 0)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		var meta rootfsbuilder.Metadata
+		if err := store.ReadJSON(filepath.Join(m.Config.StoreDir, "rootfs", "complete", entry.Name()), &meta); err != nil {
+			return nil, err
+		}
+		images = append(images, PreparedImage{
+			ImageRef:       meta.ImageRef,
+			ManifestDigest: meta.ManifestDigest,
+			ChainID:        meta.ChainID,
+			RootfsPath:     store.RootfsPath(meta.ChainID),
+			CacheHit:       true,
+		})
+	}
+	return images, nil
+}
+
+func (m *Manager) DeleteImage(ctx context.Context, chainID string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	if err := validateChainID(chainID); err != nil {
+		return err
+	}
+	store := contentstore.New(m.Config.StoreDir)
+	for _, path := range []string{store.RootfsPath(chainID), store.RootfsMetadataPath(chainID)} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manager) ListSnapshots(ctx context.Context, snapshotDir string) ([]SnapshotInfo, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	entries, err := os.ReadDir(snapshotDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	snapshots := make([]SnapshotInfo, 0)
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".snapshot" {
+			continue
+		}
+		encoded := strings.TrimSuffix(entry.Name(), ".snapshot")
+		chainID := "sha256:" + encoded
+		if seen[chainID] {
+			continue
+		}
+		seen[chainID] = true
+		artifact := SnapshotArtifact(snapshotDir, chainID)
+		snapshots = append(snapshots, SnapshotInfo{
+			ChainID:      chainID,
+			MemPath:      artifact.MemPath,
+			SnapshotPath: artifact.SnapshotPath,
+			WorkspaceDir: artifact.WorkspaceDir,
+			Exists:       SnapshotExists(artifact),
+		})
+	}
+	return snapshots, nil
+}
+
+func (m *Manager) DeleteSnapshot(ctx context.Context, snapshotDir string, chainID string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	if err := validateChainID(chainID); err != nil {
+		return err
+	}
+	artifact := SnapshotArtifact(snapshotDir, chainID)
+	for _, path := range []string{artifact.MemPath, artifact.SnapshotPath} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if err := os.RemoveAll(artifact.WorkspaceDir); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func (m *Manager) CreateSnapshot(ctx context.Context, req CreateSnapshotRequest) (*firecracker.SnapshotArtifact, error) {
@@ -270,4 +385,17 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func validateChainID(chainID string) error {
+	encoded := strings.TrimPrefix(chainID, "sha256:")
+	if encoded == "" || len(encoded) != 64 {
+		return fmt.Errorf("invalid chain id %q", chainID)
+	}
+	for _, r := range encoded {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return fmt.Errorf("invalid chain id %q", chainID)
+		}
+	}
+	return nil
 }

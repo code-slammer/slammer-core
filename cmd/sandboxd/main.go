@@ -7,11 +7,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/code-slammer/slammer-core/internal/agentapi"
@@ -21,6 +24,7 @@ import (
 	sandboxfirecracker "github.com/code-slammer/slammer-core/internal/firecracker"
 	"github.com/code-slammer/slammer-core/internal/manager"
 	sandboxruntime "github.com/code-slammer/slammer-core/internal/runtime"
+	sandboxserver "github.com/code-slammer/slammer-core/internal/server"
 	"github.com/diskfs/go-diskfs/backend/file"
 	"github.com/diskfs/go-diskfs/filesystem/ext4"
 )
@@ -54,9 +58,47 @@ func main() {
 		createSnapshot(os.Args[2:])
 	case "build-boot-image":
 		buildBootImage(os.Args[2:])
+	case "serve":
+		serve(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
+	}
+}
+
+func serve(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	configPath := fs.String("config", "sandboxd.json", "sandboxd JSON config path")
+	if err := fs.Parse(args); err != nil {
+		fatal(err)
+	}
+	cfg, err := sandboxserver.LoadConfig(*configPath)
+	if err != nil {
+		fatal(err)
+	}
+	server, err := sandboxserver.New(cfg)
+	if err != nil {
+		fatal(err)
+	}
+	httpServer := &http.Server{Addr: cfg.Listen, Handler: server.Handler()}
+	errCh := make(chan error, 1)
+	go func() {
+		fmt.Fprintf(os.Stderr, "sandboxd listening on http://%s\n", cfg.Listen)
+		errCh <- httpServer.ListenAndServe()
+	}()
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
+	select {
+	case err := <-errCh:
+		if err != nil && err != http.ErrServerClosed {
+			fatal(err)
+		}
+	case <-signalCh:
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(ctx); err != nil {
+			fatal(err)
+		}
 	}
 }
 
