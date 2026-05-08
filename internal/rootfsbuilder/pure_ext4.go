@@ -24,7 +24,12 @@ type RootfsImageBuilder interface {
 
 type PureGoExt4Builder struct{}
 
-func (PureGoExt4Builder) Build(ctx context.Context, img *oci.PulledImage, imagePath string, size int64) error {
+func (PureGoExt4Builder) Build(ctx context.Context, img *oci.PulledImage, imagePath string, size int64) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("ext4 rootfs build panic: %v", recovered)
+		}
+	}()
 	storage, err := file.CreateFromPath(imagePath, size)
 	if err != nil {
 		return err
@@ -157,10 +162,13 @@ func (a DiskfsLayerApplier) writeFile(target string, header *tar.Header, reader 
 	if a.Symlinks[target] {
 		return fmt.Errorf("refusing to overwrite symlink")
 	}
-	if err := a.removeIfExists(target); err != nil {
-		return err
+	if a.Symlinks[target] {
+		delete(a.Symlinks, target)
+		if err := a.FS.Remove(target); err != nil {
+			return err
+		}
 	}
-	file, err := a.FS.OpenFile(target, os.O_CREATE|os.O_RDWR)
+	file, err := a.FS.OpenFile(target, os.O_CREATE|os.O_RDWR|os.O_TRUNC)
 	if err != nil {
 		return err
 	}

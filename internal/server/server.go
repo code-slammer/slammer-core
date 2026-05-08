@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net/http"
 	"path/filepath"
 	"runtime"
@@ -37,7 +38,19 @@ func (s *Server) Handler() http.Handler {
 	config.Servers = []*huma.Server{{URL: "http://" + s.Config.Listen}}
 	api := humago.New(mux, config)
 	s.Register(api)
-	return mux
+	return recoverPanics(mux)
+}
+
+func recoverPanics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Printf("panic serving %s %s: %v", r.Method, r.URL.Path, recovered)
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) Register(api huma.API) {
