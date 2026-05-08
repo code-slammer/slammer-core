@@ -33,7 +33,9 @@ func New(cfg Config) (*Server, error) {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	api := humago.New(mux, huma.DefaultConfig("sandboxd", "1.0.0"))
+	config := huma.DefaultConfig("sandboxd", "1.0.0")
+	config.Servers = []*huma.Server{{URL: "http://" + s.Config.Listen}}
+	api := humago.New(mux, config)
 	s.Register(api)
 	return mux
 }
@@ -53,7 +55,7 @@ type emptyInput struct{}
 
 type healthOutput struct {
 	Body struct {
-		OK bool `json:"ok"`
+		OK bool `json:"ok" doc:"Whether the daemon is healthy and able to answer requests." example:"true"`
 	}
 }
 
@@ -65,7 +67,7 @@ func (s *Server) health(ctx context.Context, input *emptyInput) (*healthOutput, 
 
 type prepareImageInput struct {
 	Body struct {
-		ImageRef string `json:"image_ref"`
+		ImageRef string `json:"image_ref" doc:"OCI image reference to pull and materialize into the local immutable rootfs cache." minLength:"1" example:"docker.io/library/alpine:latest"`
 	}
 }
 
@@ -86,7 +88,7 @@ func (s *Server) prepareImage(ctx context.Context, input *prepareImageInput) (*p
 
 type imagesOutput struct {
 	Body struct {
-		Images []manager.PreparedImage `json:"images"`
+		Images []manager.PreparedImage `json:"images" doc:"Prepared rootfs images currently known to the sandbox runtime store."`
 	}
 }
 
@@ -101,12 +103,12 @@ func (s *Server) listImages(ctx context.Context, input *emptyInput) (*imagesOutp
 }
 
 type chainIDInput struct {
-	ChainID string `path:"chain_id"`
+	ChainID string `path:"chain_id" doc:"Rootfs chain ID. The sha256: prefix is accepted but not required." pattern:"^(sha256:)?[a-f0-9]{64}$" patternDescription:"sha256 chain ID" example:"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"`
 }
 
 type deletedOutput struct {
 	Body struct {
-		Deleted bool `json:"deleted"`
+		Deleted bool `json:"deleted" doc:"True when the delete operation completed. Missing artifacts are treated as deleted." example:"true"`
 	}
 }
 
@@ -121,7 +123,7 @@ func (s *Server) deleteImage(ctx context.Context, input *chainIDInput) (*deleted
 
 type snapshotInput struct {
 	Body struct {
-		ImageRef string `json:"image_ref"`
+		ImageRef string `json:"image_ref" doc:"OCI image reference whose prepared rootfs should be booted to agent readiness and snapshotted." minLength:"1" example:"docker.io/library/alpine:latest"`
 	}
 }
 
@@ -152,7 +154,7 @@ func (s *Server) createSnapshot(ctx context.Context, input *snapshotInput) (*sna
 
 type snapshotsOutput struct {
 	Body struct {
-		Snapshots []manager.SnapshotInfo `json:"snapshots"`
+		Snapshots []manager.SnapshotInfo `json:"snapshots" doc:"Agent-ready snapshots currently present in the configured snapshot directory."`
 	}
 }
 
@@ -176,60 +178,60 @@ func (s *Server) deleteSnapshot(ctx context.Context, input *chainIDInput) (*dele
 }
 
 type runInput struct {
-	Body RunRequest `json:"body"`
+	Body RunRequest `json:"body" doc:"One-shot VM run request. Host paths and jailer settings are intentionally server-configured only."`
 }
 
 type RunRequest struct {
-	ImageRef      string                    `json:"image_ref"`
-	Tasks         []Task                    `json:"tasks"`
-	Workdir       string                    `json:"workdir,omitempty"`
-	UID           int                       `json:"uid,omitempty"`
-	GID           int                       `json:"gid,omitempty"`
-	TimeoutMillis int64                     `json:"timeout_millis,omitempty"`
-	SnapshotMode  string                    `json:"snapshot_mode,omitempty"`
-	Machine       firecracker.MachineConfig `json:"machine,omitempty"`
+	ImageRef      string                    `json:"image_ref" doc:"OCI image reference to run. The daemon prepares the image if needed." minLength:"1" example:"docker.io/library/python:3.12-slim"`
+	Tasks         []Task                    `json:"tasks" doc:"Ordered guest tasks to execute. A /workspace mkdir task is automatically prepended." minItems:"1" maxItems:"32"`
+	Workdir       string                    `json:"workdir,omitempty" doc:"Default guest working directory for exec tasks. Must be under /workspace." default:"/workspace" pattern:"^/workspace(/.*)?$" patternDescription:"absolute path under /workspace" example:"/workspace"`
+	UID           int                       `json:"uid,omitempty" doc:"Guest UID used by task defaults when a task does not override it." minimum:"0" default:"0" example:"0"`
+	GID           int                       `json:"gid,omitempty" doc:"Guest GID used by task defaults when a task does not override it." minimum:"0" default:"0" example:"0"`
+	TimeoutMillis int64                     `json:"timeout_millis,omitempty" doc:"Maximum wall-clock time for the VM run and task defaults. Capped by daemon config." minimum:"1" default:"60000" example:"60000"`
+	SnapshotMode  string                    `json:"snapshot_mode,omitempty" doc:"Snapshot behavior for the run. disabled cold-boots; auto restores or creates the configured chain snapshot." enum:"disabled,auto" default:"disabled" example:"auto"`
+	Machine       firecracker.MachineConfig `json:"machine,omitempty" doc:"Optional per-run machine sizing. Values are capped by daemon config."`
 }
 
 type Task struct {
-	Type           string   `json:"type"`
-	Path           string   `json:"path,omitempty"`
-	Mode           uint32   `json:"mode,omitempty"`
-	ContentsBase64 string   `json:"contents_b64,omitempty"`
-	CreateParents  bool     `json:"create_parents,omitempty"`
-	Argv           []string `json:"argv,omitempty"`
-	WorkingDir     string   `json:"working_dir,omitempty"`
+	Type           string   `json:"type" doc:"Task type to run in the guest agent." enum:"mkdir,write_file,exec" example:"exec"`
+	Path           string   `json:"path,omitempty" doc:"Guest path for mkdir and write_file tasks. Must be under /workspace." pattern:"^/workspace(/.*)?$" patternDescription:"absolute path under /workspace" example:"/workspace/main.py"`
+	Mode           uint32   `json:"mode,omitempty" doc:"Unix permission bits for mkdir or write_file. Defaults to 0755 for mkdir and 0644 for write_file." minimum:"0" maximum:"511" default:"420" example:"420"`
+	ContentsBase64 string   `json:"contents_b64,omitempty" doc:"Base64-encoded file contents for write_file tasks." format:"byte" maxLength:"5592408" example:"cHJpbnQoJ2hpJykK"`
+	CreateParents  bool     `json:"create_parents,omitempty" doc:"Create missing parent directories for mkdir or write_file tasks." default:"false" example:"true"`
+	Argv           []string `json:"argv,omitempty" doc:"Argument vector for exec tasks. No implicit shell is added." minItems:"1" example:"python3"`
+	WorkingDir     string   `json:"working_dir,omitempty" doc:"Guest working directory for this exec task. Must be under /workspace." default:"/workspace" pattern:"^/workspace(/.*)?$" patternDescription:"absolute path under /workspace" example:"/workspace"`
 }
 
 type runOutput struct {
 	Body struct {
-		Image     manager.PreparedImage `json:"image"`
-		Results   []agentapi.JobResult  `json:"results"`
-		Timings   RunTimingsDTO         `json:"timings"`
-		VM        VMHandleDTO           `json:"vm"`
-		VMTimings VMTimingsDTO          `json:"vm_timings"`
+		Image     manager.PreparedImage `json:"image" doc:"Prepared image used for this run." readOnly:"true"`
+		Results   []agentapi.JobResult  `json:"results" doc:"Guest agent job results in task order, including the automatically prepended mkdir." readOnly:"true"`
+		Timings   RunTimingsDTO         `json:"timings" doc:"High-level manager timing breakdown in milliseconds." readOnly:"true"`
+		VM        VMHandleDTO           `json:"vm" doc:"Low-level VM handle metadata for this completed run." readOnly:"true"`
+		VMTimings VMTimingsDTO          `json:"vm_timings" doc:"Firecracker and agent timing breakdown in milliseconds." readOnly:"true"`
 	}
 }
 
 type VMHandleDTO struct {
-	ID         string `json:"id"`
-	SocketPath string `json:"socket_path"`
+	ID         string `json:"id" doc:"Server-generated VM identifier." format:"uuid" readOnly:"true" example:"550e8400-e29b-41d4-a716-446655440000"`
+	SocketPath string `json:"socket_path" doc:"Firecracker API socket path used internally by the daemon." readOnly:"true"`
 }
 
 type RunTimingsDTO struct {
-	PreflightDurationMillis  int64 `json:"preflight_duration_ms"`
-	PrepareDurationMillis    int64 `json:"prepare_duration_ms"`
-	ReadConfigDurationMillis int64 `json:"read_config_duration_ms"`
-	SnapshotDurationMillis   int64 `json:"snapshot_duration_ms"`
-	TotalDurationMillis      int64 `json:"total_duration_ms"`
+	PreflightDurationMillis  int64 `json:"preflight_duration_ms" doc:"Host preflight duration in milliseconds." minimum:"0" readOnly:"true"`
+	PrepareDurationMillis    int64 `json:"prepare_duration_ms" doc:"Image preparation duration in milliseconds." minimum:"0" readOnly:"true"`
+	ReadConfigDurationMillis int64 `json:"read_config_duration_ms" doc:"OCI config read duration in milliseconds." minimum:"0" readOnly:"true"`
+	SnapshotDurationMillis   int64 `json:"snapshot_duration_ms" doc:"Snapshot creation duration in milliseconds, or zero when no snapshot was created." minimum:"0" readOnly:"true"`
+	TotalDurationMillis      int64 `json:"total_duration_ms" doc:"Total manager run duration in milliseconds." minimum:"0" readOnly:"true"`
 }
 
 type VMTimingsDTO struct {
-	SetupDurationMillis        int64 `json:"setup_duration_ms"`
-	MachineStartDurationMillis int64 `json:"machine_start_duration_ms"`
-	AgentReadyDurationMillis   int64 `json:"agent_ready_duration_ms"`
-	JobsDurationMillis         int64 `json:"jobs_duration_ms"`
-	ShutdownWaitDurationMillis int64 `json:"shutdown_wait_duration_ms"`
-	TotalDurationMillis        int64 `json:"total_duration_ms"`
+	SetupDurationMillis        int64 `json:"setup_duration_ms" doc:"Firecracker setup duration in milliseconds." minimum:"0" readOnly:"true"`
+	MachineStartDurationMillis int64 `json:"machine_start_duration_ms" doc:"MicroVM start or snapshot restore duration in milliseconds." minimum:"0" readOnly:"true"`
+	AgentReadyDurationMillis   int64 `json:"agent_ready_duration_ms" doc:"Guest agent readiness wait duration in milliseconds when separately measured." minimum:"0" readOnly:"true"`
+	JobsDurationMillis         int64 `json:"jobs_duration_ms" doc:"Agent job request duration in milliseconds." minimum:"0" readOnly:"true"`
+	ShutdownWaitDurationMillis int64 `json:"shutdown_wait_duration_ms" doc:"VM shutdown wait duration in milliseconds." minimum:"0" readOnly:"true"`
+	TotalDurationMillis        int64 `json:"total_duration_ms" doc:"Total low-level VM duration in milliseconds." minimum:"0" readOnly:"true"`
 }
 
 func (s *Server) run(ctx context.Context, input *runInput) (*runOutput, error) {

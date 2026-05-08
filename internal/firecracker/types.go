@@ -75,8 +75,8 @@ type RunTimings struct {
 }
 
 type MachineConfig struct {
-	VCPUCount  int
-	MemSizeMiB int
+	VCPUCount  int `json:"vcpu_count,omitempty" doc:"Number of virtual CPUs for the microVM. Zero uses the daemon default." minimum:"0" example:"1"`
+	MemSizeMiB int `json:"mem_size_mib,omitempty" doc:"Memory size for the microVM in MiB. Zero uses the daemon default." minimum:"0" example:"256"`
 }
 
 type VMHandle struct {

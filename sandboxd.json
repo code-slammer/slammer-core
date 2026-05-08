@@ -1,0 +1,20 @@
+{
+  "listen": "127.0.0.1:8080",
+  "store_dir": "./tmp/sandbox-runtime",
+  "kernel_path": "../vmlinux-6.1.155",
+  "boot_image_path": "./tmp/boot-init.ext4",
+  "firecracker_path": "../release-v1.15.1-x86_64/firecracker-v1.15.1-x86_64",
+  "snapshot_dir": "./tmp/snapshots",
+  "cleanup_jailer": true,
+  "machine": {
+    "vcpu_count": 1,
+    "mem_size_mib": 128
+  },
+  "jailer": {
+    "binary": "../release-v1.15.1-x86_64/jailer-v1.15.1-x86_64",
+    "chroot_base_dir": "/srv/jailer",
+    "uid": 1000,
+    "gid": 1000,
+    "cgroup_version": "2"
+  }
+}
