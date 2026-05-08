@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 )
 
 type Task struct {
@@ -26,14 +28,17 @@ type RunRequest struct {
 }
 
 func main() {
+	contents, err := os.ReadFile("test.py")
+	must(err)
+	base64Contents := base64.StdEncoding.EncodeToString(contents)
 	payload := RunRequest{
-		ImageRef:     "docker.io/library/python:3.12-alpine",
+		ImageRef:     "docker.io/library/python:3.14-alpine",
 		SnapshotMode: "auto",
 		Tasks: []Task{
 			{
 				Type:          "write_file",
 				Path:          "/workspace/main.py",
-				ContentsB64:   "cHJpbnQoJ2hpJykK",
+				ContentsB64:   base64Contents,
 				Mode:          420,
 				CreateParents: true,
 			},
@@ -63,4 +68,10 @@ func main() {
 
 	fmt.Println(resp.Status)
 	fmt.Println(string(respBody))
+}
+
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
 }
