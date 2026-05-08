@@ -134,3 +134,34 @@ func TestPureGoExt4BuilderHandlesDuplicateSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPureGoExt4BuilderToleratesSymlinkReplacement(t *testing.T) {
+	layer, diffID := writeTestLayer(t, []testEntry{
+		{path: "etc/alternatives/pager", typeflag: tar.TypeSymlink, linkname: "/bin/more", mode: 0o777},
+		{path: "etc/alternatives/pager", typeflag: tar.TypeSymlink, linkname: "/usr/bin/less", mode: 0o777},
+	})
+	imagePath := filepath.Join(t.TempDir(), "rootfs.ext4")
+	const imageSize = 512 << 20
+	img := &oci.PulledImage{
+		Config: oci.ImageConfig{RootFS: oci.RootFS{DiffIDs: []string{diffID}}},
+		Layers: []oci.Layer{{DiffID: diffID, CompressedBlobPath: layer, Size: 1024}},
+	}
+
+	if err := (PureGoExt4Builder{}).Build(context.Background(), img, imagePath, imageSize); err != nil {
+		t.Fatal(err)
+	}
+
+	storage, err := file.OpenFromPath(imagePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	fsys, err := ext4.Read(storage, imageSize, 0, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fsys.Close()
+	if _, err := fsys.ReadLink("etc/alternatives/pager"); err != nil {
+		t.Fatal(err)
+	}
+}

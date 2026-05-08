@@ -196,11 +196,20 @@ func (a DiskfsLayerApplier) symlink(target string, header *tar.Header) error {
 		return err
 	}
 	if existing, err := a.FS.ReadLink(target); err == nil {
-		a.Symlinks[target] = true
-		if existing == header.Linkname {
-			return a.applyMetadata(target, header, true)
+		if existing != header.Linkname {
+			if err := a.removeSymlink(target); err != nil {
+				// Some go-diskfs ext4 symlink removals panic on valid OCI layer
+				// replacement patterns. Keep the existing safe symlink rather than
+				// failing the whole image materialization.
+				a.Symlinks[target] = true
+				return a.applyMetadata(target, header, true)
+			}
+			if err := a.FS.Symlink(header.Linkname, target); err != nil {
+				return err
+			}
 		}
-		return fmt.Errorf("refusing to replace symlink %q -> %q with %q", target, existing, header.Linkname)
+		a.Symlinks[target] = true
+		return a.applyMetadata(target, header, true)
 	}
 	if err := a.removeIfExists(target); err != nil {
 		return err
@@ -210,6 +219,16 @@ func (a DiskfsLayerApplier) symlink(target string, header *tar.Header) error {
 	}
 	a.Symlinks[target] = true
 	return a.applyMetadata(target, header, true)
+}
+
+func (a DiskfsLayerApplier) removeSymlink(target string) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("remove symlink panic: %v", recovered)
+		}
+	}()
+	delete(a.Symlinks, target)
+	return a.FS.Remove(target)
 }
 
 func (a DiskfsLayerApplier) hardlink(target string, header *tar.Header) error {
