@@ -106,6 +106,19 @@ go run ./cmd/sandboxd serve --config sandboxd.json
 
 Starts the host HTTP server prototype using a JSON config file. The sample `sandboxd.json` in the repository shows the current shape.
 
+## Dump OpenAPI Spec
+
+```sh
+go run ./cmd/sandboxd openapi
+```
+
+Writes the HTTP API OpenAPI document to `openapi.json` by default.
+
+Useful flags:
+
+- `--output`: output path, or `-` for stdout.
+- `--config`: optional `sandboxd.json` path used to set the OpenAPI server URL.
+
 ## Older Host Prototype
 
 The root `main.go` is an older host Firecracker prototype that reads `.env` through `godotenv`. New runtime work should generally use `cmd/sandboxd`.

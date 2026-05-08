@@ -26,6 +26,7 @@ Existing deeper notes:
 - Boots Firecracker with a trusted boot drive plus an immutable target OCI rootfs drive.
 - Runs one batched guest agent request containing typed jobs such as `mkdir`, `write_file`, and `exec`.
 - Can create and reuse Firecracker snapshots for lower startup latency.
+- Can dump the host HTTP API OpenAPI document with `sandboxd openapi`.
 
 ## Quick Start Without Firecracker
 

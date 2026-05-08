@@ -58,12 +58,58 @@ func main() {
 		createSnapshot(os.Args[2:])
 	case "build-boot-image":
 		buildBootImage(os.Args[2:])
+	case "openapi", "dump-openapi":
+		dumpOpenAPI(os.Args[2:])
 	case "serve":
 		serve(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
 	}
+}
+
+func dumpOpenAPI(args []string) {
+	fs := flag.NewFlagSet("openapi", flag.ExitOnError)
+	outputPath := fs.String("output", "openapi.json", "output path, or - for stdout")
+	configPath := fs.String("config", "", "optional sandboxd JSON config path used for OpenAPI server URL")
+	if err := fs.Parse(args); err != nil {
+		fatal(err)
+	}
+	if fs.NArg() != 0 {
+		fatal(fmt.Errorf("usage: sandboxd openapi [--output openapi.json] [--config sandboxd.json]"))
+	}
+
+	cfg := sandboxserver.DefaultConfig()
+	if *configPath != "" {
+		loaded, err := sandboxserver.LoadConfig(*configPath)
+		if err != nil {
+			fatal(err)
+		}
+		cfg = loaded
+	}
+	server, err := sandboxserver.New(cfg)
+	if err != nil {
+		fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		fatal(fmt.Errorf("generate openapi: GET /openapi.json returned %d: %s", rec.Code, strings.TrimSpace(rec.Body.String())))
+	}
+
+	contents := rec.Body.Bytes()
+	if *outputPath == "-" {
+		if _, err := os.Stdout.Write(contents); err != nil {
+			fatal(err)
+		}
+		return
+	}
+	if err := os.WriteFile(*outputPath, contents, 0o644); err != nil {
+		fatal(err)
+	}
+	fmt.Println(*outputPath)
 }
 
 func serve(args []string) {
@@ -544,7 +590,7 @@ func copyIntoExt4(fsys *ext4.FileSystem, sourcePath string, targetPath string, m
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage:\n  sandboxd prepare-image [flags] IMAGE_REF\n  sandboxd inspect-rootfs [--ls PATH] [--read PATH] ROOTFS_EXT4\n  sandboxd build-boot-image --init /tmp/init --agent /tmp/agent --output boot-init.ext4\n  sandboxd run [flags] IMAGE_REF -- COMMAND [ARG...]\n  sandboxd demo-local [flags]\n")
+	fmt.Fprintf(os.Stderr, "usage:\n  sandboxd prepare-image [flags] IMAGE_REF\n  sandboxd inspect-rootfs [--ls PATH] [--read PATH] ROOTFS_EXT4\n  sandboxd build-boot-image --init /tmp/init --agent /tmp/agent --output boot-init.ext4\n  sandboxd run [flags] IMAGE_REF -- COMMAND [ARG...]\n  sandboxd openapi [--output openapi.json]\n  sandboxd serve [--config sandboxd.json]\n  sandboxd demo-local [flags]\n")
 }
 
 func fatal(err error) {
